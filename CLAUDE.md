@@ -26,7 +26,7 @@ API, gotchas) - read it first; this file is for *developing* the skill.
   run it -> document in `SKILL.md`. A returned feature is not proof (the "equal distance"
   chamfer returns a feature and removes nothing) - check volume and an image.
 - **Run the selftest after any swlib change:** `scripts/sw_run.sh scripts/selftest.py`
-  (~90 s, currently 59/59; it closes its own documents).
+  (~90 s, currently 62/62; it closes its own documents).
 - **One SolidWorks instance:** never run two SolidWorks jobs at once - test subagents run one at
   a time, and don't use SolidWorks yourself while one is running.
 - **The user's documents:** never close or modify SolidWorks documents this work didn't create.

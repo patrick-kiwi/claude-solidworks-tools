@@ -72,6 +72,12 @@ Why: knobs, round spacers, caps, bushings, grooves.
 
 ## 4. Polygons and lofts (the user's circle-to-hexagon example)
 
+Polygons DONE: `p.polygon(centre, sides, radius= | flats=, toward=)` draws via `polyline()`
+and returns the corners; selftest checks hexagon (radius, Top), hexagon (across flats, Front)
+and pentagon (Right) by exact volume and bbox. Finding: `CreatePolygon`'s Inscribed flag
+changes nothing (the point is always a corner, both settings measured identical) and it adds a
+construction circle - not used.
+
 Why: transitions between different cross-sections - knob with a hex socket, funnels, nozzles,
 round-fan-to-rectangular-vent ducts, tapered handles.
 

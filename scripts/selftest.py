@@ -261,6 +261,25 @@ with Part() as p:                                   # L-shaped polyline extruded
     check("L-shaped polyline extruded", p.volume(), (12 * 3 + 3 * 7) * 5)
     p.close()
 
+ngon = lambda n, R: n / 2 * R * R * math.sin(2 * math.pi / n)     # regular polygon area
+S60, C30 = math.sin(math.pi / 3), math.cos(math.pi / 6)
+for plane, kw, h, want_box, area in [
+        ("Top Plane", dict(centre=(5, 0, 3), sides=6, radius=10), 5,      # corner toward +X
+         (-5, 0, 3 - 10 * S60, 15, 5, 3 + 10 * S60), ngon(6, 10)),
+        ("Front Plane", dict(centre=(0, 0, 0), sides=6, flats=10, toward="+Y"), 4,   # flats face +-X
+         (-5, -5 / C30, 0, 5, 5 / C30, 4), ngon(6, 5 / C30)),
+        ("Right Plane", dict(centre=(0, 2, -1), sides=5, radius=6), 3,    # default: corner toward +Y
+         (0, 2 - 6 * math.cos(math.pi / 5), -1 - 6 * math.sin(2 * math.pi / 5), 3, 8,
+          -1 + 6 * math.sin(2 * math.pi / 5)), ngon(5, 6))]:
+    with Part() as p:
+        p.select_plane(plane); p.start_sketch()
+        corners = p.polygon(**kw); p.extrude("Polygon", h)
+        ok = abs(p.volume() - area * h) < 1e-3 and all(abs(g - w) < 1e-3 for g, w in zip(p.bbox(), want_box))
+        results.append(ok)
+        print(f"{'PASS' if ok else 'FAIL'}  polygon {kw} on {plane}: volume {p.volume():.3f} "
+              f"(want {area * h:.3f}), bbox {p.bbox()}" + ("" if ok else f" (want {want_box})"))
+        p.close()
+
 with Part(OUT / "st_revolve.SLDPRT") as p:
     p.select_plane("Front Plane"); p.start_sketch()
     p.centreline((0, 0, 0), (0, 1, 0))

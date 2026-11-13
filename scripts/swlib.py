@@ -475,6 +475,39 @@ class Part(_Doc):
             assert (x1, y1) != (x2, y2), "repeated point in polyline (don't close it yourself)"
             self.sm.CreateLine(x1, y1, 0, x2, y2, 0)
 
+    def polygon(self, centre, sides, radius=None, flats=None, toward=None):
+        """Regular polygon on the sketch plane; returns its corners (model mm), counter-clockwise
+        seen from the +side of the plane's normal axis (e.g. from +Y on Top Plane).
+        Size it by `radius` (centre to corner) or `flats` (across-flats distance, how hex keys,
+        nuts and sockets are specified: flats = 2 * radius * cos(180/sides)) - exactly one.
+        `toward` points the FIRST CORNER: '+X', '-Z', ... or a model vector lying in the plane;
+        default the first of +X, +Y, +Z in the plane (+X on Top/Front Plane, +Y on Right). A
+        hexagon with a corner toward +X has its flats facing the other in-plane axis.
+        Drawn with polyline() rather than CreatePolygon, whose 'inscribed' flag was measured
+        to change nothing (the given point is always a corner) and which adds a construction
+        circle; extruded volume = sides/2 * R^2 * sin(360/sides) * depth (selftest)."""
+        assert sides >= 3 and (radius is None) != (flats is None), "sides >= 3 and one of radius/flats"
+        R = radius if radius is not None else flats / 2 / math.cos(math.pi / sides)
+        m = self._xf
+        n = [m[2], m[5], m[8]]                          # sketch normal in model space
+        k = max(range(3), key=lambda i: abs(n[i]))      # the plane's normal axis
+        if toward is None:
+            u = [1.0 if i == min(i for i in range(3) if i != k) else 0.0 for i in range(3)]
+        elif isinstance(toward, str):
+            u = [0.0] * 3; u[AXIS[toward[1].upper()]] = 1.0 if toward[0] == "+" else -1.0
+        else:
+            u = list(toward)
+        assert abs(u[k]) < 1e-9 and any(u), f"toward {toward!r} must lie in the sketch plane"
+        L = math.sqrt(sum(c*c for c in u)); u = [c / L for c in u]
+        a = [0.0] * 3; a[k] = 1.0                       # +axis; v = a x u turns u CCW about it
+        v = [a[1]*u[2] - a[2]*u[1], a[2]*u[0] - a[0]*u[2], a[0]*u[1] - a[1]*u[0]]
+        pts = []
+        for i in range(sides):
+            t = 2 * math.pi * i / sides
+            pts.append(tuple(centre[j] + R * (math.cos(t)*u[j] + math.sin(t)*v[j]) for j in range(3)))
+        self.polyline(pts)
+        return pts
+
     def centreline(self, p1, p2):
         """The axis for revolve()/revolve_cut(): an (infinite) construction line through two
         model-space points on the sketch plane. Its DIRECTION p1 -> p2 matters for partial

@@ -16,8 +16,8 @@ Read the image; `report()` gives volume, bounding box and the feature list; asse
 interference detection. Use all of them - every bug in the original build session was caught
 this way, and one was invisible to the numbers alone.
 
-**Proven scope:** parts built from rectangles (optionally rounded), circles and straight-sided
-polygons (polylines) sketched on Top,
+**Proven scope:** parts built from rectangles (optionally rounded), circles, regular polygons
+and other straight-sided profiles (polylines) sketched on Top,
 Front or Right Plane, offset planes parallel to them, or flat axis-aligned faces; extrudes
 (either direction) and blind/through-all cuts (either or both directions), optionally drafted
 (tapered); revolves and revolved cuts about a sketched centreline (full or partial angle,
@@ -103,6 +103,7 @@ When you finish, leave your documents open so the user can look at them in Solid
 | `rect(p1, p2, r=0)` | Axis-aligned rectangle from two opposite corners; `r` rounds corners (must be < half the short side) |
 | `circle(centre, radius)` | Circle |
 | `polyline(points)` | Closed straight-sided polygon through the points (don't repeat the first) |
+| `polygon(centre, sides, radius=None, flats=None, toward=None)` | Regular polygon sized by circumradius or across-flats (hex keys, nuts); first corner points `toward` ('+X' or a vector; default +X on Top/Front, +Y on Right). Returns the corners |
 | `centreline(p1, p2)` | The axis for a revolve, through two points on the sketch plane; one per sketch; direction matters for partial angles |
 | `revolve(name, deg=360, reverse=False, symmetric=False)` | Boss: revolve the profile about the sketch's centreline. Partial angles follow the right-hand rule about p1 -> p2; `symmetric` splits the angle either side of the plane |
 | `revolve_cut(name, deg=360, ...)` | Cut: remove what the revolved profile sweeps (grooves, bores); same direction rules |
