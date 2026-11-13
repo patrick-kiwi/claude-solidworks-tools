@@ -202,6 +202,23 @@ def revolve_volume(area, centroid_r, deg=360):
     return area * centroid_r * math.radians(deg)
 
 
+def loft_volume(profile0, profile1):
+    """Exact volume of a TWO-profile loft between polygons on parallel axis-aligned planes,
+    given their corners (model mm) in paired order - corner i of one runs straight to corner i
+    of the other. The loft is ruled, so its cross-section area is quadratic in height and
+    Simpson's rule is exact: V = h/6 (A0 + 4 Amid + A1), Amid from the corner midpoints.
+    Holds for twisted pairings too (verified: a square frustum paired one corner out)."""
+    assert len(profile0) == len(profile1) >= 3, "same number of corners in each profile"
+    k = next(a for a in range(3) if len({round(q[a], 9) for q in profile0}) == 1)
+    i, j = [a for a in range(3) if a != k]
+    h = abs(profile1[0][k] - profile0[0][k])
+
+    def area(pts):
+        return abs(sum(p[i] * q[j] - q[i] * p[j] for p, q in zip(pts, pts[1:] + pts[:1]))) / 2
+    mid = [tuple((a + b) / 2 for a, b in zip(p, q)) for p, q in zip(profile0, profile1)]
+    return h / 6 * (area(profile0) + 4 * area(mid) + area(profile1))
+
+
 def assert_close(label, got, want, tol=0.05):
     """Print and assert a check, e.g. assert_close("cavity", v - p.volume(), rr_area(...) * depth)."""
     print(f"  check {label}: {got:.3f} vs {want:.3f}")
@@ -371,6 +388,7 @@ class Part(_Doc):
         self.sm.AddToDB = True           # draw exactly where told: no snapping / inference
         self.sm.DisplayWhenAdded = False
         self._xf = self._axis = None
+        self._corners, self._circles, self._profiles = [], [], {}
         self.features = []
 
     # ---- selection
@@ -434,6 +452,21 @@ class Part(_Doc):
         self.sm.InsertSketch(True)
         self._xf = self.sm.ActiveSketch.ModelToSketchTransform.ArrayData
         self._axis = None
+        self._corners, self._circles = [], []     # what this sketch holds, for loft alignment
+
+    def end_sketch(self, name):
+        """Close the open sketch WITHOUT making a feature, name it, and return the name - for
+        loft()/loft_cut() profiles. Remembers the sketch's corners/circle for loft alignment."""
+        self.sm.InsertSketch(True)
+        sketch = self.doc.FeatureByPositionReverse(0)
+        assert self._corners or self._circles, "end_sketch(): nothing drawn in this sketch"
+        sketch.Name = name
+        assert sketch.Name == name, f"could not name the sketch {name!r} (name already used?)"
+        self.doc.ClearSelection2(True)
+        m = self._xf
+        k = max(range(3), key=lambda i: abs([m[2], m[5], m[8]][i]))     # normal axis
+        self._profiles[name] = (list(self._corners), list(self._circles), k)
+        return name
 
     def _s(self, x, y, z):
         # SolidWorks MathTransform, row-vector form: p' = scale * (p . R + T),
@@ -450,6 +483,13 @@ class Part(_Doc):
         round ends needs r slightly less than half the width (r == half-width is rejected)."""
         (ax, ay), (bx, by) = self._s(*p1), self._s(*p2)
         x0, x1, y0, y1 = min(ax, bx), max(ax, bx), min(ay, by), max(ay, by)
+        # corners in model space (for loft alignment): with r, the 8 points where arcs meet sides
+        i, j = [a for a in range(3) if abs(p1[a] - p2[a]) > 1e-9]
+        (i0, i1), (j0, j1) = sorted((p1[i], p2[i])), sorted((p1[j], p2[j]))
+        for ci, cj, di, dj in ((i0, j0, 1, 1), (i1, j0, -1, 1), (i1, j1, -1, -1), (i0, j1, 1, -1)):
+            for oi, oj in (((0, dj * r), (di * r, 0)) if r > 0 else ((0, 0),)):
+                q = list(p1); q[i], q[j] = ci + oi, cj + oj
+                self._corners.append(tuple(q))
         if r <= 0:
             self.sm.CreateCornerRectangle(x0, y0, 0, x1, y1, 0)
             return
@@ -464,6 +504,7 @@ class Part(_Doc):
     def circle(self, centre, radius):
         cx, cy = self._s(*centre)
         self.sm.CreateCircleByRadius(cx, cy, 0, radius*MM)
+        self._circles.append((tuple(centre), radius))
 
     def polyline(self, points):
         """Closed polygon through model-space points on the sketch plane (the last point joins
@@ -474,6 +515,7 @@ class Part(_Doc):
         for (x1, y1), (x2, y2) in zip(s, s[1:] + s[:1]):
             assert (x1, y1) != (x2, y2), "repeated point in polyline (don't close it yourself)"
             self.sm.CreateLine(x1, y1, 0, x2, y2, 0)
+        self._corners.extend(tuple(q) for q in points)
 
     def polygon(self, centre, sides, radius=None, flats=None, toward=None):
         """Regular polygon on the sketch plane; returns its corners (model mm), counter-clockwise
@@ -606,6 +648,83 @@ class Part(_Doc):
         material; only the overlap is removed."""
         return self._revolve(name, deg, reverse, symmetric, True)
 
+    # ---- lofts
+    def _align_points(self, recs):
+        """One pick point per profile so that corresponding corners pair up: the corner of each
+        profile whose direction from the profile's centre is closest to the direction of the
+        first polygon profile's first corner; for a circle, its point in that direction."""
+        k = recs[0][2]
+        flat = lambda v: [0.0 if a == k else v[a] for a in range(3)]
+        unit = lambda v: (lambda n: [c / n for c in v] if n > 1e-12 else v)(math.sqrt(sum(c*c for c in v)))
+        centre = lambda pts: [sum(q[a] for q in pts) / len(pts) for a in range(3)]
+        ref = next(([q - c for q, c in zip(corners[0], centre(corners))]
+                    for corners, _, _ in recs if corners),
+                    [1.0 if a == min(a for a in range(3) if a != k) else 0.0 for a in range(3)])
+        ref = unit(flat(ref))
+        out = []
+        for corners, circles, _ in recs:
+            if corners:
+                c = centre(corners)
+                out.append(max(corners, key=lambda q: sum(
+                    u * r for u, r in zip(unit(flat([a - b for a, b in zip(q, c)])), ref))))
+            else:
+                (cen, rad), = circles
+                out.append(tuple(cen[a] + rad * ref[a] for a in range(3)))
+        return out
+
+    def _loft(self, name, profiles, align, cut):
+        assert len(profiles) >= 2, "a loft needs at least two profiles"
+        recs = []
+        for n in profiles:
+            assert n in self._profiles, f"{n!r} is not a sketch made with end_sketch()"
+            corners, circles, k = self._profiles[n]
+            assert bool(corners) != bool(circles) and len(circles) <= 1, \
+                f"profile {n!r}: one closed polygon/rectangle OR one circle per sketch (proven scope)"
+            recs.append(self._profiles[n])
+        assert len({r[2] for r in recs}) == 1, "profiles must lie on parallel planes (proven scope)"
+        picks = list(align) if align is not None else self._align_points(recs)
+        assert len(picks) == len(profiles), "align= needs one point per profile"
+        self.doc.ClearSelection2(True)
+        for n, q in zip(profiles, picks):
+            ok = self.doc.Extension.SelectByID2(n, "SKETCH", q[0]*MM, q[1]*MM, q[2]*MM, True, 1, NOTHING, 0)
+            assert ok, f"could not select profile {n!r}"
+        if cut:
+            f = self.fm.InsertCutBlend(False, True, False, 1, 0, 0, False, 0, 0, 0, True, True)
+        else:
+            f = self.fm.InsertProtrusionBlend2(False, True, False, 1, 0, 0, 1, 1, True, True,
+                                               False, 0, 0, 0, True, True, True, 0)
+        if f is None:
+            raise RuntimeError(f"loft {name!r} FAILED - usual causes: a profile that isn't one "
+                               f"closed contour, profiles in the wrong order, or (cut) a loft that "
+                               f"misses the material")
+        return self._named(f, name, "loft")
+
+    def loft(self, name, profiles, align=None):
+        """Boss: loft through sketches made with end_sketch(), in the order given (sketch each
+        on a parallel plane - e.g. Top Plane and plane('P', 'Top Plane', h)). Each profile is
+        one closed polygon/rectangle or one circle.
+
+        ALIGNMENT is the trap: SolidWorks pairs the profiles' corners from where each profile
+        is picked; without pick points it pairs them by how the sketch was drawn, and rect()
+        and polyline() wind opposite ways on some planes - the loft silently TWISTS (measured:
+        a square frustum came out 3333 instead of 4667 mm^3). So every loft here is picked at
+        corresponding corners: by default the corner of each profile pointing the same way from
+        its centre as the first polygon's first corner (right for similar shapes: square ->
+        smaller square, circle -> hexagon - where the circle's pick point makes no difference).
+        Pass align=[point per profile] (model mm, a corner of each) to pair them yourself.
+
+        Two profiles make a RULED loft: straight lines between paired corners, so polygon ->
+        polygon volume is exact with loft_volume(). Give both the same number of corners (a
+        square -> hexagon loft twists into curved faces; add corners on the square's sides
+        instead) or make one a circle. Three or more profiles make a smooth (spline) loft that
+        passes through every profile."""
+        return self._loft(name, profiles, align, False)
+
+    def loft_cut(self, name, profiles, align=None):
+        """Cut: remove the lofted region between the profiles (e.g. a tapered or circle-to-hex
+        socket, sketched on a face and on a plane inside the part). Same rules as loft()."""
+        return self._loft(name, profiles, align, True)
+
     # ---- edges, fillets, chamfers
     def edges(self, where=None):
         """Every edge of the solid bodies as Edge records (mm), optionally filtered by a
@@ -661,8 +780,20 @@ class Part(_Doc):
         return list(self.doc.GetBodies2(0, True) or [])   # 0 = solid bodies
 
     def bbox(self):
-        """(xmin, ymin, zmin, xmax, ymax, zmax) in mm over all solid bodies."""
-        boxes = [val(b.GetBodyBox) for b in self.bodies()]
+        """(xmin, ymin, zmin, xmax, ymax, zmax) in mm over all solid bodies - TIGHT: built from
+        each body's extreme points, because GetBodyBox pads spline faces (a loft whose widest
+        section is +-12 mm reported +-13)."""
+        boxes = []
+        with batch_calls(self.app):
+            for b in self.bodies():
+                box = [0.0] * 6
+                for a in range(3):
+                    for sign, slot in ((-1, a), (1, a + 3)):
+                        d = [0, 0, 0]; d[a] = sign
+                        ok, *q = b.GetExtremePoint(*d)
+                        assert ok, "GetExtremePoint failed"
+                        box[slot] = q[a]
+                boxes.append(box)
         if not boxes:
             return None
         return tuple(round(1000 * f(b[i] for b in boxes), 3)

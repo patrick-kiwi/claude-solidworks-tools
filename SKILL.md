@@ -1,6 +1,6 @@
 ---
 name: solidworks
-description: Drive the user's running SolidWorks from WSL/Linux - build parts and assemblies from Python scripts via the COM API (sketches, extrudes, cuts, revolves, draft/taper, fillets, chamfers), then check the result with rendered images, exact volumes and interference detection. Use this whenever the user wants something modelled, designed or built in SolidWorks or "in CAD" (enclosures, boxes, brackets, mounts, plates, spacers, knobs, bushings, lids, tapered or press-fit lids, cases for a PCB or Raspberry Pi/Arduino, parts for 3D printing), wants edges rounded or two parts checked for fit, or mentions SolidWorks, SLDPRT or SLDASM files - even if they don't say "SolidWorks" and just ask you to "make a part" or "design a case".
+description: Drive the user's running SolidWorks from WSL/Linux - build parts and assemblies from Python scripts via the COM API (sketches, extrudes, cuts, revolves, lofts, draft/taper, fillets, chamfers), then check the result with rendered images, exact volumes and interference detection. Use this whenever the user wants something modelled, designed or built in SolidWorks or "in CAD" (enclosures, boxes, brackets, mounts, plates, spacers, knobs, bushings, funnels, nozzles, duct transitions, lids, tapered or press-fit lids, cases for a PCB or Raspberry Pi/Arduino, parts for 3D printing), wants edges rounded or two parts checked for fit, or mentions SolidWorks, SLDPRT or SLDASM files - even if they don't say "SolidWorks" and just ask you to "make a part" or "design a case".
 ---
 
 # SolidWorks via COM
@@ -21,11 +21,12 @@ and other straight-sided profiles (polylines) sketched on Top,
 Front or Right Plane, offset planes parallel to them, or flat axis-aligned faces; extrudes
 (either direction) and blind/through-all cuts (either or both directions), optionally drafted
 (tapered); revolves and revolved cuts about a sketched centreline (full or partial angle,
-either way or symmetric); selecting edges by geometry; constant-radius fillets (convex and concave, single
+either way or symmetric); lofts and loft cuts between polygon, rectangle and circle
+profiles on parallel planes (e.g. circle -> hexagon); selecting edges by geometry; constant-radius fillets (convex and concave, single
 edges or whole tangent loops) and 45-degree chamfers; assemblies placed by origin with
 interference checks; section (cut-away) views and close-ups (zoom to a region, measurable in
 pixels) for images. Every one of these is covered by `scripts/selftest.py` against exact
-volumes or bounding boxes. Anything else (lofts, sweeps, angled sketch planes, drawings,
+volumes or bounding boxes. Anything else (lofts with guide curves or end tangency, sweeps, angled sketch planes, drawings,
 exports, editing the user's existing files) is untested - see "Going beyond the proven scope" below.
 
 ## 1. Preflight
@@ -106,6 +107,9 @@ When you finish, leave your documents open so the user can look at them in Solid
 | `polygon(centre, sides, radius=None, flats=None, toward=None)` | Regular polygon sized by circumradius or across-flats (hex keys, nuts); first corner points `toward` ('+X' or a vector; default +X on Top/Front, +Y on Right). Returns the corners |
 | `centreline(p1, p2)` | The axis for a revolve, through two points on the sketch plane; one per sketch; direction matters for partial angles |
 | `revolve(name, deg=360, reverse=False, symmetric=False)` | Boss: revolve the profile about the sketch's centreline. Partial angles follow the right-hand rule about p1 -> p2; `symmetric` splits the angle either side of the plane |
+| `end_sketch(name)` | Close the sketch without a feature and name it - a profile for `loft()`; returns the name |
+| `loft(name, [sketch, ...], align=None)` | Boss through the profiles in order; corresponding corners paired automatically (see Lofts) |
+| `loft_cut(name, [sketch, ...], align=None)` | Cut the lofted region (tapered or circle-to-hex sockets) |
 | `revolve_cut(name, deg=360, ...)` | Cut: remove what the revolved profile sweeps (grooves, bores); same direction rules |
 | `extrude(name, depth, reverse=False, draft_deg=0)` | Boss along the sketch normal: outward from a face, +Y/+Z/+X from Top/Front/Right Plane; `reverse=True` the other way. Draft makes the profile shrink as it grows (`draft_outward=True` to grow) |
 | `cut(name, depth=None, reverse=False, both=False, draft_deg=0)` | Cut AGAINST the sketch normal: into material from a face, -Y/-Z/-X from Top/Front/Right Plane; `None` = through all; `reverse=True` the other way; `both=True` both ways (depth each side). Draft makes the pocket narrow as it deepens |
@@ -113,8 +117,8 @@ When you finish, leave your documents open so the user can look at them in Solid
 | `fillet(name, r, edges, propagate=False)` | Constant-radius fillet; `propagate=True` follows tangent edges (one edge of a rounded-rect loop does the loop) |
 | `chamfer(name, d, edges, propagate=False)` | 45-degree chamfer, `d` back along both faces; `propagate` as for fillets |
 | `report()` | Rebuild; print features, body count, volume (mm^3), bbox (mm) |
-| `bbox()`, `volume()` | The same numbers, for asserts |
-| `rr_area`, `drafted_volume`, `fillet_volume`, `chamfer_volume`, `revolve_volume`, `assert_close` | Exact-volume helpers (module-level in swlib) - see 4. Verify |
+| `bbox()`, `volume()` | The same numbers, for asserts (`bbox()` is tight, also on curved loft faces) |
+| `rr_area`, `drafted_volume`, `fillet_volume`, `chamfer_volume`, `revolve_volume`, `loft_volume`, `assert_close` | Exact-volume helpers (module-level in swlib) - see 4. Verify |
 | `snap(name, view)` / `snaps(prefix, views)` | Render PNGs next to the saved file; prints the `/mnt/c/...` path to Read |
 | `snap(name, view, box=(x0, y0, z0, x1, y1, z1))` | **Close-up**: zoom so that model-space box fills the image (any view, parts and assemblies, inside `section()`); prints px per mm. `snaps(..., box=)` too |
 | `doc.pixel((x, y, z))` | (column, row) of a model point in the last close-up - for checking a gap or position in the PNG |
@@ -251,6 +255,46 @@ p.rect((14, 3, 0), (16, 5, 0)); p.revolve_cut("Grip groove")   # may stick out p
   (r0 + r1)/2; a triangle's is the mean of its corners. Exact to 1e-3 mm^3 in the selftest
   (tube, cone, torus about an off-origin axis, groove, partial cuts).
 
+### Lofts (transitions: circle to hexagon, funnels, nozzles, ducts, tapered handles)
+
+Sketch each cross-section on its own parallel plane, close each sketch with `end_sketch()`
+(no feature), then loft through them in order:
+
+```python
+p.select_plane("Top Plane"); p.start_sketch()
+p.circle((0, 0, 0), 10); base = p.end_sketch("Round end")
+p.plane("Hex level", "Top Plane", 20)
+p.select_plane("Hex level"); p.start_sketch()
+hexagon = p.polygon((0, 20, 0), 6, flats=17); top = p.end_sketch("Hex end")   # polygon returns corners
+p.loft("Circle to hex", [base, top])
+```
+
+- **Twist is the trap.** SolidWorks pairs the profiles' corners from where each is picked;
+  left to itself it pairs them by how each sketch was drawn, and `rect()` and `polyline()`
+  wind opposite ways on some planes - the loft then twists silently (a square frustum came
+  out 3333 mm^3 instead of 4667). `loft()` therefore always picks: by default the corner of
+  each profile that points the same way from its centre as the first polygon's first corner,
+  which is right for similar shapes (square -> smaller square, rounded rectangle ->
+  smaller rounded rectangle, circle -> polygon - a circle's pick makes no difference). For anything else
+  pass `align=[a corner of each profile]` (model mm) naming the corners that belong together.
+- **Same number of corners**, or one end a circle. A square -> hexagon loft twists into
+  curved faces; draw the square as a 6-point `polyline()` (extra corners on two sides) so
+  each hexagon corner has a partner.
+- **Two profiles make a ruled loft** (straight lines between paired corners), so polygon
+  lofts are exact: `loft_volume(corners0, corners1)` with the corners in paired order (the
+  frustum formula generalised; true for twisted pairings too). Three or more profiles give a
+  smooth loft through every profile - a fat middle profile makes a barrel whose widest point
+  is exactly that profile (tight `bbox()` confirms).
+- **Round faces read slightly low**: SolidWorks' volume for lofted round faces (circle ->
+  circle, rounded rectangles) is 4e-5..1e-4 below the exact value even when the face is an
+  exact cone - compare those with a relative tolerance (`tol=want * 2e-4`). Planar-faced lofts
+  are exact. For a circle -> polygon there is no closed form: check the volume lies between
+  the polygon prism and the cylinder, and look at a `*Top` close-up of both ends.
+- Loft cuts: sketch the mouth on the part's face and the floor on a plane inside it, then
+  `loft_cut()` - e.g. a tapered hex socket.
+- Proven only between profiles on parallel planes, one closed contour per sketch, with no
+  guide curves or end tangency; the library refuses other cases.
+
 ### Design habits that avoid failures
 
 - Blind cuts must reach material or the feature fails; when cutting a wall from outside, make
@@ -277,7 +321,8 @@ A feature returning successfully only means SolidWorks made *something*. Check w
    no single image shows. swlib has the formulas, so don't re-derive them:
    `rr_area(a, b, r)` (rounded-rect area from half-extents), `drafted_volume(a, b, r, depth,
    deg)`, `fillet_volume(r, straight_len, corner_r)` / `chamfer_volume(...)` (a straight edge,
-   or a whole rounded-rect loop with Pappus corners), `revolve_volume(area, centroid_r, deg)`, and `assert_close(label, got, want)`.
+   or a whole rounded-rect loop with Pappus corners), `revolve_volume(area, centroid_r, deg)`, `loft_volume(corners0, corners1)`, and
+   `assert_close(label, got, want)`.
    `examples/tapered_lid_box/build.py` uses all of them.
 2. **Images.** Read the PNGs. Pick the views for this part: an isometric plus the orthographic
    view of every face you cut or that features exit through (e.g. `*Bottom` to prove a hole
@@ -357,6 +402,9 @@ Known behaviour to expect:
   (sets `CommandInProgress`, ~20x-60x faster, restored on exit); `edges()` already does.
 - **`ViewZoomTo2`** takes its corners in the view's screen frame, not model space - it only
   looks right in *Front, where they coincide (handled by `snap(box=)`).
+- **`GetBodyBox` is loose around spline faces** (lofts): +-13 mm for a loft whose true extent
+  is +-12. `Part.bbox()` uses `GetExtremePoint` per axis instead, which is tight; component
+  boxes in assemblies (`Assembly.box`/`bbox`) still come from SolidWorks' boxes.
 - **`AddComponent5`** positions the component's bounding-box centre, not its origin (handled
   in `Assembly.add`).
 - **Enum values** aren't available by name under late binding; look them up with
@@ -374,7 +422,7 @@ Known behaviour to expect:
 - `scripts/sw_api.sh` - offline API signature / enum lookup
 - `scripts/pngread.py` - stdlib PNG reader and edge-line finder for measuring close-ups
 - `scripts/selftest.py` - regression test of every swlib feature against exact volumes; run it
-  after changing swlib (`sw_run.sh selftest.py`, about 90 s)
+  after changing swlib (`sw_run.sh selftest.py`, about 2.5 minutes)
 - `examples/rpi_enclosure/` - Raspberry Pi 4/5 case (base with standoffs and port cutouts, lid
   with locating lip and vents, assembly with interference check). Read it before a similar
   job; it shows the frame, constants and verification style in practice.

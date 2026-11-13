@@ -26,7 +26,7 @@ API, gotchas) - read it first; this file is for *developing* the skill.
   run it -> document in `SKILL.md`. A returned feature is not proof (the "equal distance"
   chamfer returns a feature and removes nothing) - check volume and an image.
 - **Run the selftest after any swlib change:** `scripts/sw_run.sh scripts/selftest.py`
-  (~90 s, currently 62/62; it closes its own documents).
+  (~2.5 min, currently 77/77; it closes its own documents).
 - **One SolidWorks instance:** never run two SolidWorks jobs at once - test subagents run one at
   a time, and don't use SolidWorks yourself while one is running.
 - **The user's documents:** never close or modify SolidWorks documents this work didn't create.
@@ -71,6 +71,6 @@ API, gotchas) - read it first; this file is for *developing* the skill.
 2. Test hygiene: agents can see `evals/` file names via `ls` of the skill dir (none opened
    them). Consider moving grading material outside the skill directory before larger runs.
 3. Techniques to prove next: **see ROADMAP.md** (agreed order: ~~close-ups~~ (done), ~~Front/Right and
-   offset reference planes~~ (done), ~~revolves~~ (done), polygons + lofts; then shell, patterns, mirror, sweep,
+   offset reference planes~~ (done), ~~revolves~~ (done), ~~polygons + lofts~~ (done); then shell, patterns, mirror, sweep,
    rib, countersinks, editing existing files). STL/STEP export is deliberately left to the user.
 4. Optionally run skill-creator's description optimisation for triggering accuracy.

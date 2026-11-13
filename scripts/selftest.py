@@ -3,7 +3,7 @@ Run after changing swlib:  sw_run.sh selftest.py   (builds throwaway parts in so
 import math
 import time
 from swlib import (Part, Assembly, workdir, app, val, rr_area, drafted_volume, fillet_volume,
-                   chamfer_volume, revolve_volume)
+                   chamfer_volume, revolve_volume, loft_volume)
 from pngread import read_png, grey_row, grey_col, dark_runs
 
 OUT = workdir("_selftest")
@@ -340,6 +340,113 @@ with Part() as p:                                   # a cut turns the same way: 
     p.rect((0, -1, 0), (11, 21, 0)); p.revolve_cut("Three quarters", 270)
     check("270-degree revolved cut leaves a quarter", p.volume(), math.pi * 100 * 20 / 4)
     same("  ...the +X+Z quarter", [p.bbox()], [(0, 0, 0, 10, 20, 10)])
+    p.close()
+
+# lofts: two profiles make a ruled loft, so polygon lofts are exact by loft_volume() (Simpson)
+sqr = lambda a, y: [(a, y, a), (-a, y, a), (-a, y, -a), (a, y, -a)]       # square corners on Y=y
+
+
+def two_profiles(p, bottom, top, h=20):
+    """Sketch `bottom(p)` on Top Plane and `top(p)` on a plane h above; return the names."""
+    p.select_plane("Top Plane"); p.start_sketch(); bottom(p); s1 = p.end_sketch("Bottom")
+    p.plane("Loft top", "Top Plane", h)
+    p.select_plane("Loft top"); p.start_sketch(); top(p); s2 = p.end_sketch("Top")
+    return [s1, s2]
+
+
+with Part(OUT / "st_loft.SLDPRT") as p:              # the winding trap: rect and polyline wind
+    s = two_profiles(p, lambda p: p.rect((-10, 0, -10), (10, 0, 10)),   # oppositely; auto-align
+                     lambda p: p.polyline(sqr(5, 20)))                   # must pair them anyway
+    p.loft("Frustum", s)
+    check("square frustum loft (rect -> polyline, auto-aligned)", p.volume(), frustum(20, 10, 20))
+    check("  loft_volume() helper", loft_volume(sqr(10, 0), sqr(5, 20)), frustum(20, 10, 20))
+    same("  tight bbox", [p.bbox()], [(-10, 0, -10, 10, 20, 10)])
+    with p.section("Y", offset=10):                  # mid-height cut face is 15 mm square
+        closeup(p, "loft_mid", "*Top", (-11, 10, -11, 11, 10, 11),
+                [((x, 10, -7.5), (x, 10, 7.5)) for x in (-7.5, 7.5)] +
+                [((x, 0, -10), (x, 0, 10)) for x in (-10, 10)], label="loft section at mid-height")
+    p.save(); p.snaps("loft", ("*Isometric", "*Front"))
+    p.close()
+
+with Part() as p:                                    # paired one corner out on purpose: twisted
+    s = two_profiles(p, lambda p: p.rect((-10, 0, -10), (10, 0, 10)), lambda p: p.polyline(sqr(5, 20)))
+    p.loft("Twisted", s, align=[(10, 0, 10), (-5, 20, 5)])
+    top = [(-5, 20, 5), (-5, 20, -5), (5, 20, -5), (5, 20, 5)]          # paired with sqr(10, 0)
+    check("loft paired one corner out (align=) twists, still loft_volume()", p.volume(),
+          loft_volume(sqr(10, 0), top))
+    p.close()
+
+with Part() as p:                                    # circle -> circle: cone frustum
+    s = two_profiles(p, lambda p: p.circle((0, 0, 0), 10), lambda p: p.circle((0, 20, 0), 5))
+    p.loft("Cone", s)
+    want = math.pi * 20 / 3 * (100 + 25 + 50)
+    # the face is an exact cone, but SolidWorks' volume of LOFTED round faces reads 4e-5..1e-4 low
+    check("circle -> circle loft = cone frustum (to 2e-4)", p.volume(), want, tol=want * 2e-4)
+    p.close()
+
+with Part(OUT / "st_loft_hex.SLDPRT") as p:          # the circle -> hexagon transition
+    hexagon = []
+    s = two_profiles(p, lambda p: p.circle((0, 0, 0), 10),
+                     lambda p: hexagon.extend(p.polygon((0, 20, 0), 6, radius=10)))
+    p.loft("Circle to hexagon", s)
+    v = p.volume()
+    ok = ngon(6, 10) * 20 < v < math.pi * 100 * 20
+    results.append(ok)
+    print(f"{'PASS' if ok else 'FAIL'}  circle -> hexagon loft between hexagonal prism and cylinder: {v:.3f}")
+    same("  tight bbox", [p.bbox()], [(-10, 0, -10, 10, 20, 10)])
+    ring = [(10 * math.cos(t * math.pi / 90), 0, 10 * math.sin(t * math.pi / 90)) for t in range(180)]
+    closeup(p, "loft_hex_top", "*Top", (-11, 20, -11, 11, 20, 11),
+            list(zip(hexagon, hexagon[1:] + hexagon[:1])) + list(zip(ring, ring[1:] + ring[:1])),
+            scan="col", label="hexagon top and circle base seen from above")
+    p.save(); p.snaps("loft_hex", ("*Isometric", "*Front"))
+    p.close()
+
+with Part() as p:                                    # square with 6 corners -> hexagon: ruled, exact
+    sq6 = [(8, 0, 0), (8, 0, -8), (-8, 0, -8), (-8, 0, 0), (-8, 0, 8), (8, 0, 8)]   # polygon()'s turn
+    hexagon = []
+    s = two_profiles(p, lambda p: p.polyline(sq6),
+                     lambda p: hexagon.extend(p.polygon((0, 20, 0), 6, radius=10)))
+    p.loft("Square to hexagon", s)
+    check("6-corner square -> hexagon loft = loft_volume()", p.volume(), loft_volume(sq6, hexagon))
+    p.close()
+
+with Part() as p:                                    # three profiles: smooth through the middle
+    p.select_plane("Top Plane"); p.start_sketch(); p.rect((-10, 0, -10), (10, 0, 10)); s1 = p.end_sketch("S1")
+    p.plane("P10", "Top Plane", 10); p.plane("P20", "Top Plane", 20)
+    p.select_plane("P10"); p.start_sketch(); p.rect((-7.5, 10, -7.5), (7.5, 10, 7.5)); s2 = p.end_sketch("S2")
+    p.select_plane("P20"); p.start_sketch(); p.rect((-5, 20, -5), (5, 20, 5)); s3 = p.end_sketch("S3")
+    p.loft("Three in line", [s1, s2, s3])
+    check("three collinear squares loft = frustum", p.volume(), frustum(20, 10, 20))
+    p.close()
+
+with Part() as p:                                    # a fat middle profile: the loft bulges to it
+    p.select_plane("Top Plane"); p.start_sketch(); p.rect((-10, 0, -10), (10, 0, 10)); s1 = p.end_sketch("S1")
+    p.plane("P10", "Top Plane", 10); p.plane("P20", "Top Plane", 20)
+    p.select_plane("P10"); p.start_sketch(); p.rect((-12, 10, -12), (12, 10, 12)); s2 = p.end_sketch("S2")
+    p.select_plane("P20"); p.start_sketch(); p.rect((-10, 20, -10), (10, 20, 10)); s3 = p.end_sketch("S3")
+    p.loft("Barrel", [s1, s2, s3])
+    same("three-profile barrel: widest exactly at the middle profile (tight bbox)", [p.bbox()],
+         [(-12, 0, -12, 12, 20, 12)])
+    p.close()
+
+with Part() as p:                                    # rounded rectangles on Front Plane
+    p.select_plane("Front Plane"); p.start_sketch(); p.rect((-10, -6, 0), (10, 6, 0), r=3); s1 = p.end_sketch("S1")
+    p.plane("F15", "Front Plane", 15)
+    p.select_plane("F15"); p.start_sketch(); p.rect((-6, -4, 15), (6, 4, 15), r=1); s2 = p.end_sketch("S2")
+    p.loft("Rounded taper", [s1, s2])
+    want = 15 / 6 * (rr_area(10, 6, 3) + 4 * rr_area(8, 5, 2) + rr_area(6, 4, 1))
+    check("rounded-rect loft on Front Plane (Simpson, to 2e-4)", p.volume(), want, tol=want * 2e-4)
+    same("  went +Z", [p.bbox()], [(-10, -6, 0, 10, 6, 15)])
+    p.close()
+
+with Part() as p:                                    # loft cut: tapered square socket
+    block(p, 15, 15, 20)
+    v = p.volume()
+    p.select_face(0, 20, 0, "+Y"); p.start_sketch(); p.rect((-5, 20, -5), (5, 20, 5)); s1 = p.end_sketch("Mouth")
+    p.plane("P15", "Top Plane", 15)
+    p.select_plane("P15"); p.start_sketch(); p.rect((-3, 15, -3), (3, 15, 3)); s2 = p.end_sketch("Floor")
+    p.loft_cut("Socket", [s1, s2])
+    check("loft cut: square socket 10 -> 6 over 5 mm", v - p.volume(), frustum(10, 6, 5))
     p.close()
 
 with Part() as p:                                   # traps: crossing the axis, two centrelines

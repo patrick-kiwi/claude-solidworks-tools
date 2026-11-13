@@ -70,7 +70,25 @@ Why: knobs, round spacers, caps, bushings, grooves.
   cut: a rectangular groove in a cylinder.
 - Add a `revolve_volume(area, centroid_r, deg=360)` helper next to the other volume helpers.
 
-## 4. Polygons and lofts (the user's circle-to-hexagon example)
+## 4. Polygons and lofts (the user's circle-to-hexagon example) - DONE
+
+Lofts DONE: `p.end_sketch(name)`, `p.loft(name, [sketches], align=None)`, `p.loft_cut(...)`,
+`loft_volume(corners0, corners1)`; `bbox()` now tight (`GetExtremePoint`). Proven in selftest
+(15 cases): square frustum (exact, and a mid-height section close-up lands within 1 px),
+deliberately twisted pairing = `loft_volume`, circle -> circle cone frustum, circle -> hexagon
+(between prism and cylinder; *Top close-up of both ends to 1 px), 6-corner square -> hexagon
+(exact), three collinear squares (exact), three-profile barrel (widest exactly at the middle
+profile), rounded rectangles on Front Plane (Simpson), loft cut socket (exact). Findings:
+- Pairing comes from the pick point; without one, SolidWorks pairs by sketch order, and
+  `rect()`/`polyline()` wind oppositely on some planes -> silent twist (3333 vs 4667 mm^3).
+  Picks at corresponding corners fix any winding, so `loft()` always picks (auto: the corner
+  pointing the same way from each profile's centre). A circle's pick makes no difference.
+- Two profiles -> ruled loft; Simpson with the corner-midpoint polygon is exact, even twisted.
+- Square -> hexagon (4 vs 6 corners) twists into curved faces; give both the same count.
+- SolidWorks' volume of lofted ROUND faces is 4e-5..1e-4 low, even when the face is an
+  exact cone/cylinder (ConeParams checked); planar lofts and revolves are exact.
+- `GetBodyBox` pads spline bodies (+-13 for a true +-12); `GetExtremePoint` works under late
+  binding as `ok, x, y, z = body.GetExtremePoint(dx, dy, dz)`.
 
 Polygons DONE: `p.polygon(centre, sides, radius= | flats=, toward=)` draws via `polyline()`
 and returns the corners; selftest checks hexagon (radius, Top), hexagon (across flats, Front)
