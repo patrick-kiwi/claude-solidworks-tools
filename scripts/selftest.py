@@ -1,7 +1,9 @@
 """Regression test for swlib: every feature checked against an exact, hand-derived volume.
 Run after changing swlib:  sw_run.sh selftest.py   (builds throwaway parts in solidworks_work\\_selftest)"""
 import math
-from swlib import Part, workdir
+import time
+from swlib import (Part, Assembly, workdir, app, rr_area, drafted_volume, fillet_volume,
+                   chamfer_volume)
 
 OUT = workdir("_selftest")
 TAN4 = math.tan(math.radians(4))
@@ -65,6 +67,7 @@ with Part(OUT / "st_draft.SLDPRT") as p:
     p.select_plane("Top Plane"); p.start_sketch()
     p.rect((-10, 0, -10), (10, 0, 10)); p.extrude("Drafted boss", 10, draft_deg=4)
     check("boss 4 deg draft (shrinks)", p.volume(), frustum(20, 20 - 20 * TAN4, 10))
+    check("drafted_volume() helper = frustum", drafted_volume(10, 10, 0, 10, 4), frustum(20, 20 - 20 * TAN4, 10))
     v = p.volume()
     p.select_face(0, 10, 0, "+Y"); p.start_sketch()
     p.rect((-5, 10, -5), (5, 10, 5)); p.cut("Drafted pocket", 5, draft_deg=4)
@@ -74,27 +77,50 @@ with Part(OUT / "st_draft.SLDPRT") as p:
 with Part(OUT / "st_loop.SLDPRT") as p:
     p.select_plane("Top Plane"); p.start_sketch()
     p.rect((-20, 0, -15), (20, 0, 15), r=5); p.extrude("Rounded block", 10)
+    t0 = time.perf_counter()
     loop = p.edges(lambda e: e.lies_in("Y", 10))
+    dt = time.perf_counter() - t0
+    ok = dt < 3 and not app().CommandInProgress          # was ~13 s per call before batch_calls()
+    results.append(ok)
+    print(f"{'PASS' if ok else 'FAIL'}  edges() fast ({dt:.2f} s) and CommandInProgress restored")
     one = [e for e in loop if e.along("X")][:1]
     v = p.volume()
     p.fillet("Loop fillet", 2, one, propagate=True)
-    # Exact removal: section A = r^2(1-pi/4) swept along 2*(30+20) mm of straight sides, plus the
-    # four quarter-turns at the R5 corners by Pappus: A * 2*pi * rho, where rho = R - xbar and
-    # xbar = r(10-3pi)/(3(4-pi)) is the section centroid's distance in from the outer edge.
-    r, R = 2, 5
-    A = r * r * (1 - math.pi / 4)
-    rho = R - r * (10 - 3 * math.pi) / (3 * (4 - math.pi))
-    check(f"propagated fillet round a {len(loop)}-edge loop", v - p.volume(),
-          A * 100 + A * 2 * math.pi * rho)
+    # Exact removal (swlib.fillet_volume): section r^2(1-pi/4) swept along 2*(30+20) mm of
+    # straight sides, plus the four quarter-turns at the R5 corners by Pappus.
+    check(f"propagated fillet round a {len(loop)}-edge loop", v - p.volume(), fillet_volume(2, 100, 5))
 
     # chamfer the bottom loop by propagation: triangle section d^2/2, centroid d/3 in from the edge
     v = p.volume()
     bottom = [e for e in p.edges(lambda e: e.lies_in("Y", 0)) if e.along("X")][:1]
     d = 1
     p.chamfer("Loop chamfer", d, bottom, propagate=True)
-    A = d * d / 2
-    check("propagated chamfer round the loop", v - p.volume(),
-          A * 100 + A * 2 * math.pi * (R - d / 3))
+    check("propagated chamfer round the loop", v - p.volume(), chamfer_volume(d, 100, 5))
+    p.close()
+
+# fillet radius == plate thickness: exact (r > thickness also "succeeds" but builds another shape)
+with Part(OUT / "st_plate.SLDPRT") as p:
+    p.select_plane("Top Plane"); p.start_sketch()
+    p.rect((-30, 0, -20), (30, 0, 20), r=2); p.extrude("Plate", 2)
+    check("plate volume", p.volume(), rr_area(30, 20, 2) * 2)
+    v = p.volume()
+    p.fillet("Edge fillet", 2, p.edges(lambda e: e.lies_in("Y", 2) and e.along("X"))[:1], propagate=True)
+    check("r2 fillet on a 2 mm plate", v - p.volume(), fillet_volume(2, 4 * 28 + 4 * 18, 2))
+    p.save()
+
+    with Assembly(OUT / "st_asm.SLDASM") as a:          # two plates stacked, then overlapping
+        a.add(p.path)
+        top = a.add(p.path, origin=(0, 2, 0))
+        bb = a.bbox()
+        check("Assembly.bbox() of two stacked plates", sum(bb[3:]) - sum(bb[:3]), 60 + 4 + 40)
+        ok = a.interference() == []
+        results.append(ok)
+        print(f"{'PASS' if ok else 'FAIL'}  stacked (touching) plates: no interference")
+        lap = a.add(p.path, origin=(0, 1, 0))           # half-way into the bottom plate
+        ok = len(a.interference()) > 0
+        results.append(ok)
+        print(f"{'PASS' if ok else 'FAIL'}  overlapping plate: interference found")
+        a.close()
     p.close()
 
 print(f"\n{sum(results)}/{len(results)} passed")

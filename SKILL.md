@@ -71,7 +71,10 @@ with Part(OUT / "bracket.SLDPRT") as p:              # closes itself if the buil
     p.report(); p.save(); p.snaps("bracket")
 ```
 
-Run it: `$S/sw_run.sh path/to/build.py` (output streams as the build runs).
+Run it: `$S/sw_run.sh path/to/build.py` (output streams as the build runs). A box with a lid,
+an assembly and a dozen images takes about 40 s; if yours may run past ~2 minutes, raise the
+Bash tool's timeout (or run it in the background) rather than let it be cut off, and tee the
+output to a log.
 
 Each run creates the documents fresh. If the previous run's copy is still open, it is closed
 first and discarded - together with any assembly from the same project folder that still holds
@@ -99,11 +102,13 @@ When you finish, leave your documents open so the user can look at them in Solid
 | `chamfer(name, d, edges, propagate=False)` | 45-degree chamfer, `d` back along both faces; `propagate` as for fillets |
 | `report()` | Rebuild; print features, body count, volume (mm^3), bbox (mm) |
 | `bbox()`, `volume()` | The same numbers, for asserts |
+| `rr_area`, `drafted_volume`, `fillet_volume`, `chamfer_volume`, `assert_close` | Exact-volume helpers (module-level in swlib) - see 4. Verify |
 | `snap(name, view)` / `snaps(prefix, views)` | Render PNGs next to the saved file; prints the `/mnt/c/...` path to Read |
 | `with doc.section("Z", offset=0):` | Display-only cut-away for the snaps inside the block (parts and assemblies); hides the +axis side so *Front/*Right/*Top/*Isometric look at the cut face |
 | `save(path=None)`, `close()` | Save as / close this document |
 | `Assembly.add(part_path, origin)` | Insert an open part with its **origin** at `origin`; verifies placement |
 | `Assembly.box(comp)` | A placed component's box (mm), for asserting e.g. that a lid is seated |
+| `Assembly.bbox()` | Overall box of all placed components - assert it against the size the user asked for |
 | `Assembly.interference()` | List of clash volumes; empty = no clashes |
 
 Several features can go in one sketch (four standoff circles, seven vent slots) - one
@@ -155,8 +160,13 @@ p.fillet("Rim fillet", 1, rim, propagate=True)     # one straight + propagate = 
   conditions to separate them.
 - Edge records go stale after every feature; call `edges()` again rather than reusing them.
 - Fillet a concave edge (floor meeting wall) and SolidWorks adds material; a convex edge loses it.
-- Large radii fail when the fillet can't fit (radius bigger than an adjacent face) - the
-  feature then returns None and the library raises.
+- A fillet bigger than it can properly fit often does **not** fail: SolidWorks builds a
+  different shape and the image looks right. Measured: r2 on the edge of a 1.5 mm plate, and
+  a concave r1.5 floor fillet in a pocket with R1 corners, both "succeeded" with the wrong
+  volume. Up to the limit is fine and exact: r equal to the plate thickness (r2 on a 2 mm
+  plate), r equal to the corner radius. So keep r <= the height of the faces either side and
+  <= the loop's corner radius, and let `fillet_volume` catch it when you don't. Only when the
+  fillet can't be built at all does the feature return None (the library then raises).
 - Do fillets last, after the cuts that define the edges; filleting first changes the edges
   later cuts and selections rely on.
 - Vertical corners of a footprint are simplest rounded in the sketch (`rect(..., r=)`); use a
@@ -206,8 +216,11 @@ A feature returning successfully only means SolidWorks made *something*. Check w
    radius R, the section area times 2*pi*(R - centroid offset) per full turn - offset d/3 for a
    chamfer, r(10-3pi)/(3(4-pi)) for a fillet). It proves a hole
    goes all the way through, a slot is the right depth, a chamfer actually happened - things
-   no single image shows. `examples/tapered_lid_box/build.py` has helpers for rounded
-   rectangles, drafted pockets and fillet loops (Pappus for the corners).
+   no single image shows. swlib has the formulas, so don't re-derive them:
+   `rr_area(a, b, r)` (rounded-rect area from half-extents), `drafted_volume(a, b, r, depth,
+   deg)`, `fillet_volume(r, straight_len, corner_r)` / `chamfer_volume(...)` (a straight edge,
+   or a whole rounded-rect loop with Pappus corners), and `assert_close(label, got, want)`.
+   `examples/tapered_lid_box/build.py` uses all of them.
 2. **Images.** Read the PNGs. Pick the views for this part: an isometric plus the orthographic
    view of every face you cut or that features exit through (e.g. `*Bottom` to prove a hole
    goes all the way, `*Left` for holes in a -X face) - pass them to `snaps()`. Check each
@@ -227,6 +240,8 @@ A feature returning successfully only means SolidWorks made *something*. Check w
    trusting `interference()`. In the first session the interference check said "0 clashes"
    while the lid was floating 12 mm above the base - true, and meaningless. Only the image
    showed it. (`Assembly.add` now places by origin and verifies, but keep looking.)
+   Decide what the user's stated size means (usually the closed outside size, lid included),
+   say so, and assert `Assembly.bbox()` against it.
 
 If something is wrong, fix the script and re-run. If a failure is confusing, build a small
 probe part that does just the failing step and inspect it (print the picked face's normal,
@@ -267,6 +282,9 @@ Known behaviour to expect:
 - **Entity methods work on edges/faces directly**: `edge.Select4(True, NOTHING)` works under
   late binding, no QueryInterface needed.
 - **Units.** The raw API is metres; `swlib.MM = 1e-3`.
+- **Speed.** Each COM call from WSL costs ~20 ms, so a loop over geometry (every edge, face or
+  component) can take many seconds. Wrap such read-only loops in `with swlib.batch_calls():`
+  (sets `CommandInProgress`, ~20x-60x faster, restored on exit); `edges()` already does.
 - **`AddComponent5`** positions the component's bounding-box centre, not its origin (handled
   in `Assembly.add`).
 - **Enum values** aren't available by name under late binding; look them up with
@@ -284,10 +302,10 @@ Known behaviour to expect:
 - `scripts/sw_status.py` - preflight check
 - `scripts/sw_api.sh` - offline API signature / enum lookup
 - `scripts/selftest.py` - regression test of every swlib feature against exact volumes; run it
-  after changing swlib (`sw_run.sh selftest.py`, about a minute)
+  after changing swlib (`sw_run.sh selftest.py`, about 30 s)
 - `examples/rpi_enclosure/` - Raspberry Pi 4/5 case (base with standoffs and port cutouts, lid
   with locating lip and vents, assembly with interference check). Read it before a similar
   job; it shows the frame, constants and verification style in practice.
 - `examples/tapered_lid_box/` - box with a 4-degree tapered lid fit, concave and convex fillets,
-  exact-volume checks for every feature, and an edge-loop check that the lip and seat tapers
-  match.
+  exact-volume checks for every feature, an edge-loop check that the lip and seat tapers
+  match, and a cut-away of the closed assembly.

@@ -26,7 +26,7 @@ API, gotchas) - read it first; this file is for *developing* the skill.
   run it -> document in `SKILL.md`. A returned feature is not proof (the "equal distance"
   chamfer returns a feature and removes nothing) - check volume and an image.
 - **Run the selftest after any swlib change:** `scripts/sw_run.sh scripts/selftest.py`
-  (~1 min, currently 11/11; it closes its own documents).
+  (~30 s, currently 18/18; it closes its own documents).
 - **One SolidWorks instance:** never run two SolidWorks jobs at once - test subagents run one at
   a time, and don't use SolidWorks yourself while one is running.
 - **The user's documents:** never close or modify SolidWorks documents this work didn't create.
@@ -56,14 +56,18 @@ API, gotchas) - read it first; this file is for *developing* the skill.
 - Iteration 2 (same cases): 16/16; perfboard 326 s -> 172 s.
 - Iteration 3 (draft/fillet/chamfer cases): 12/12 first try. The SD-box agent took 829 s,
   mostly building cut-away half-copies by hand -> section views were then added
-  (`with doc.section("Z"): ...`, display-only) - **not yet re-tested with a fresh agent.**
+  (`with doc.section("Z"): ...`, display-only).
+- Iteration 4 (SD box only): 6/6, 829 s -> 363 s; the agent used `section()` three times and
+  built no half-copies. Its feedback led to: `edges()` was ~13 s per call (each COM call ~20 ms
+  out-of-process) -> `batch_calls()` (`CommandInProgress`), now 0.2 s - the tapered-lid example
+  went to 36 s end to end; exact-volume helpers moved into swlib; `Assembly.bbox()`; proven that
+  over-size fillets (r > face height or > pocket corner radius) silently build the wrong shape.
 - Design insight now in SKILL.md: a taper turns size error into height error (e/tan(angle));
   default to a rim-stop fit with lip clearance (`FIT_CLEAR` in examples/tapered_lid_box).
 
 ## Open items / next steps
 
-1. Re-run the `tapered-lid-sd-card-box` eval as iteration 4 to confirm agents now use
-   `section()` and the run time drops well below 829 s.
+1. Re-run all five evals (iteration 5) to measure the batch_calls() speed-up end to end.
 2. Test hygiene: agents can see `evals/` file names via `ls` of the skill dir (none opened
    them). Consider moving grading material outside the skill directory before larger runs.
 3. Candidate techniques (prove first): zoom-to-area for close-up images, revolves, sketching

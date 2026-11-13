@@ -16,13 +16,16 @@ Every feature is checked against an exact volume; the taper fit is checked by co
 lip's and seat's edge loops at the top and bottom of the taper.
 """
 import math
-from swlib import Part, Assembly, workdir
+from swlib import Part, Assembly, workdir, rr_area, drafted_volume, fillet_volume, assert_close
 
 OUT = workdir("tapered_lid_box")
 
 OX, OZ, H, R_OUT = 35.0, 25.0, 30.0, 4.0      # outer half-extents, height, corner radius
 WALL, FLOOR = 2.0, 2.0
 IX, IZ, R_IN = OX - WALL, OZ - WALL, 2.0       # cavity half-extents and corner radius
+# R_IN = R_OUT - WALL keeps the wall uniform round the corners (smaller: thicker there, fine;
+# larger: thinner). With R_OUT <= WALL, use a small R_IN (e.g. 1) and accept thick corners.
+# keep F_FLOOR <= R_IN and the outer fillets <= R_OUT so the exact fillet volumes apply.
 LIP_D, DRAFT = 4.0, 4.0                        # taper depth (mm) and angle (deg)
 FIT_CLEAR = 0.15                               # lip undersize per side (rim-stop fit)
 T = 2.0                                        # lid plate thickness
@@ -31,34 +34,7 @@ F_FLOOR, F_BASE, F_LID = 1.5, 1.0, 1.5         # fillet radii
 t = LIP_D * math.tan(math.radians(DRAFT))      # taper's inset over its depth (0.28 mm)
 
 
-# ---- exact-volume helpers -----------------------------------------------------------------
-def rr_area(a, b, r):
-    """Area of a rounded rectangle with half-extents a, b and corner radius r."""
-    return 4 * a * b - (4 - math.pi) * r * r
-
-
-def drafted_volume(a, b, r, depth, deg):
-    """Volume swept by a rounded rect that insets by s = d*tan(deg) at depth d.
-    The area is quadratic in d, so Simpson's rule is exact."""
-    k = math.tan(math.radians(deg))
-    A = lambda d: rr_area(a - d * k, b - d * k, r - d * k)
-    return depth / 6 * (A(0) + 4 * A(depth / 2) + A(depth))
-
-
-def fillet_volume(r, straight_len, corner_r, convex):
-    """Material removed (convex) or added (concave) by a fillet of radius r around a rounded-
-    rectangle edge loop: section r^2(1-pi/4) swept along the straights, plus the corners by
-    Pappus, with the section centroid xbar in from the corner edge."""
-    A = r * r * (1 - math.pi / 4)
-    xbar = r * (10 - 3 * math.pi) / (3 * (4 - math.pi))
-    return A * straight_len + A * 2 * math.pi * (corner_r - xbar)
-
-
-def assert_close(label, got, want, tol=0.05):
-    print(f"  check {label}: {got:.2f} vs {want:.2f}")
-    assert abs(got - want) <= tol, f"{label}: got {got:.3f}, want {want:.3f}"
-
-
+# ---- helpers ----------------------------------------------------------------------------
 def x_extent(part, y):
     """Half-width of the edge loop lying in the plane Y=y, ignoring the outer perimeter
     (the outer wall's edges share those planes: the rim, and the lid plate's underside)."""
@@ -92,14 +68,14 @@ with Part(OUT / "tl_base.SLDPRT") as b:
     floor_edge = b.edges(lambda e: e.lies_in("Y", FLOOR) and e.lies_in("Z", -IZ) and e.along("X"))
     b.fillet("Floor fillet", F_FLOOR, floor_edge, propagate=True)
     straight = 4 * (IX - R_IN) + 4 * (IZ - R_IN)
-    assert_close("floor fillet (adds)", b.volume() - v, fillet_volume(F_FLOOR, straight, R_IN, False))
+    assert_close("floor fillet (adds)", b.volume() - v, fillet_volume(F_FLOOR, straight, R_IN))
 
     # convex fillet round the bottom outside edge
     v = b.volume()
     bottom_edge = b.edges(lambda e: e.lies_in("Y", 0) and e.lies_in("Z", -OZ) and e.along("X"))
     b.fillet("Base edge fillet", F_BASE, bottom_edge, propagate=True)
     straight = 4 * (OX - R_OUT) + 4 * (OZ - R_OUT)
-    assert_close("base edge fillet (removes)", v - b.volume(), fillet_volume(F_BASE, straight, R_OUT, True))
+    assert_close("base edge fillet (removes)", v - b.volume(), fillet_volume(F_BASE, straight, R_OUT))
 
     seat_top, seat_bottom = x_extent(b, H), x_extent(b, H - LIP_D)
     b.report(); b.save(); b.snaps("base", ("*Isometric", "*Top"))
@@ -127,7 +103,7 @@ with Part(OUT / "tl_lid.SLDPRT") as l:
     top_edge = l.edges(lambda e: e.lies_in("Y", T) and e.lies_in("Z", -OZ) and e.along("X"))
     l.fillet("Lid edge fillet", F_LID, top_edge, propagate=True)
     straight = 4 * (OX - R_OUT) + 4 * (OZ - R_OUT)
-    assert_close("lid edge fillet", v - l.volume(), fillet_volume(F_LID, straight, R_OUT, True))
+    assert_close("lid edge fillet", v - l.volume(), fillet_volume(F_LID, straight, R_OUT))
 
     lip_top, lip_bottom = x_extent(l, 0), x_extent(l, -LIP_D)
     l.report(); l.save(); l.snaps("lid", ("*Isometric", "*Bottom", "*Front"))
@@ -145,6 +121,8 @@ with Assembly(OUT / "tl_box.SLDASM") as a:
     lid = a.add(OUT / "tl_lid.SLDPRT", origin=(0, H, 0))
     assert abs(Assembly.box(lid)[1] - (H - LIP_D)) < 1e-3, "lid not seated"
     assert not a.interference(), "lid and base clash"
+    print("closed size", a.bbox())             # outer size of the closed box
+    assert a.bbox() == (-OX, 0, -OZ, OX, H + T, OZ), "closed box is not the intended size"
     a.save(); a.snaps("asm", ("*Isometric", "*Front"))
     with a.section("Z"):                       # cut-away through the middle: lip in its seat
         a.snaps("asm_section", ("*Front", "*Isometric"))

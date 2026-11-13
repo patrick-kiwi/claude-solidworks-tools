@@ -59,6 +59,22 @@ def app():
         raise RuntimeError("SolidWorks is not running - ask the user to start it.") from None
 
 
+@contextmanager
+def batch_calls(sw=None):
+    """Make many small COM calls fast: sets ISldWorks.CommandInProgress for the block, then
+    restores the previous value (also on error). From an out-of-process client like ours each
+    call otherwise costs ~20 ms; inside this block ~1 ms (measured: 48 edges 12.8 s -> 0.19 s,
+    identical results). Use it around read-only loops over geometry (edges, faces, boxes) -
+    keep feature creation, view changes and snaps outside it, which are untested inside."""
+    sw = sw or app()
+    prev = bool(sw.CommandInProgress)
+    sw.CommandInProgress = True
+    try:
+        yield
+    finally:
+        sw.CommandInProgress = prev
+
+
 def workdir(project, root=None):
     """A Windows folder for this project's CAD files and images (created if missing).
     Default root: %USERPROFILE%\\solidworks_work. SolidWorks saves reliably to local drives,
@@ -119,6 +135,55 @@ def _clear_target(sw, path):
             sw.CloseDoc(d.GetTitle)
     if any(_doc_path(d).name.lower() == name for d in open_docs(sw)):
         raise RuntimeError(f"could not close the previous {path.name}; close it in SolidWorks")
+
+
+# ---------------------------------------------------------------- exact-volume checks
+# Hand-derived volumes to assert each feature against (record v = p.volume() before it).
+# All verified to 1e-3 mm^3 in selftest.py / examples/tapered_lid_box.
+
+def rr_area(a, b, r):
+    """Area of a rounded rectangle with half-extents a, b and corner radius r (r=0: plain)."""
+    return 4 * a * b - (4 - math.pi) * r * r
+
+
+def drafted_volume(a, b, r, depth, deg):
+    """Volume of a drafted extrude/cut of a rounded rectangle (half-extents a, b, corner r) whose
+    profile insets by d*tan(deg) at depth d. Area is quadratic in d, so Simpson's rule is exact
+    (for r=0, or while the corner radius stays positive: r > depth*tan(deg))."""
+    k = math.tan(math.radians(deg))
+    A = lambda d: rr_area(a - d * k, b - d * k, max(r - d * k, 0) if r > 0 else 0)
+    return depth / 6 * (A(0) + 4 * A(depth / 2) + A(depth))
+
+
+def fillet_volume(r, straight_len, corner_r=None):
+    """Material a fillet of radius r removes (convex edge) or adds (concave edge).
+    Straight edges: r^2(1-pi/4) per mm of straight_len. With corner_r, the edge is a whole
+    rounded-rectangle loop (straight_len = sum of its straight edges, e.g. 4(a-R)+4(b-R)) and
+    the four corners add a full turn by Pappus.
+    Valid only while r <= corner_r and r <= the height of the faces either side: beyond that
+    SolidWorks still builds a fillet, but a different shape (measured: concave r1.5 in an R1
+    pocket corner, convex r2 on a 1.5 mm plate) - the formula then disagrees, which is your cue."""
+    A = r * r * (1 - math.pi / 4)
+    vol = A * straight_len
+    if corner_r is not None:
+        xbar = r * (10 - 3 * math.pi) / (3 * (4 - math.pi))    # section centroid, in from the edge
+        vol += A * 2 * math.pi * (corner_r - xbar)
+    return vol
+
+
+def chamfer_volume(d, straight_len, corner_r=None):
+    """Material a 45-degree chamfer of distance d removes; corner_r as for fillet_volume."""
+    A = d * d / 2
+    vol = A * straight_len
+    if corner_r is not None:
+        vol += A * 2 * math.pi * (corner_r - d / 3)
+    return vol
+
+
+def assert_close(label, got, want, tol=0.05):
+    """Print and assert a check, e.g. assert_close("cavity", v - p.volume(), rr_area(...) * depth)."""
+    print(f"  check {label}: {got:.3f} vs {want:.3f}")
+    assert abs(got - want) <= tol, f"{label}: got {got:.3f}, want {want:.3f}"
 
 
 # ---------------------------------------------------------------- edges
@@ -349,19 +414,22 @@ class Part(_Doc):
     def edges(self, where=None):
         """Every edge of the solid bodies as Edge records (mm), optionally filtered by a
         predicate, e.g. p.edges(lambda e: e.lies_in('Y', 20) and e.along('X')).
-        Edge objects go stale after any new feature - call edges() again afterwards."""
+        Edge objects go stale after any new feature - call edges() again afterwards.
+        Fast (~0.2 s for 50 edges) because it runs inside batch_calls(); without that it took
+        ~13 s and was most of a typical build's run time."""
         out = []
-        for body in self.bodies():
-            for e in (val(body.GetEdges) or []):
-                cp = val(e.GetCurveParams3)
-                mid = val(e.Evaluate2((cp.UMinValue + cp.UMaxValue) / 2, 0))[:3]
-                curve = val(e.GetCurve)
-                kind = "line" if val(curve.IsLine) else "circle" if val(curve.IsCircle) else "other"
-                radius = val(curve.CircleParams)[6] / MM if kind == "circle" else None
-                rec = Edge(e, kind, tuple(v / MM for v in cp.StartPoint),
-                           tuple(v / MM for v in cp.EndPoint), tuple(v / MM for v in mid), radius)
-                if where is None or where(rec):
-                    out.append(rec)
+        with batch_calls(self.app):
+            for body in self.bodies():
+                for e in (val(body.GetEdges) or []):
+                    cp = val(e.GetCurveParams3)
+                    mid = val(e.Evaluate2((cp.UMinValue + cp.UMaxValue) / 2, 0))[:3]
+                    curve = val(e.GetCurve)
+                    kind = "line" if val(curve.IsLine) else "circle" if val(curve.IsCircle) else "other"
+                    radius = val(curve.CircleParams)[6] / MM if kind == "circle" else None
+                    rec = Edge(e, kind, tuple(v / MM for v in cp.StartPoint),
+                               tuple(v / MM for v in cp.EndPoint), tuple(v / MM for v in mid), radius)
+                    if where is None or where(rec):
+                        out.append(rec)
         return out
 
     def select_edges(self, edges):
@@ -453,6 +521,14 @@ class Assembly(_Doc):
         """A placed component's bounding box in assembly space, mm:
         (xmin, ymin, zmin, xmax, ymax, zmax). Use it to assert that parts sit where intended."""
         return tuple(round(v * 1000, 3) for v in val(comp.GetBox(False, False)))
+
+    def bbox(self):
+        """Overall box of everything placed with add(), assembly space, mm - e.g. the closed
+        box's outer size, to assert against the size the user asked for."""
+        assert self.components, "no components added"
+        boxes = [self.box(c) for c in self.components]
+        return tuple(f(b[i] for b in boxes)
+                     for f, i in [(min, 0), (min, 1), (min, 2), (max, 3), (max, 4), (max, 5)])
 
     def interference(self):
         """Run interference detection. Returns a list of interference volumes (mm^3);
