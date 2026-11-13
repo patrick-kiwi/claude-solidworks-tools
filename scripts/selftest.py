@@ -3,7 +3,7 @@ Run after changing swlib:  sw_run.sh selftest.py   (builds throwaway parts in so
 import math
 import time
 from swlib import (Part, Assembly, workdir, app, val, rr_area, drafted_volume, fillet_volume,
-                   chamfer_volume, revolve_volume, loft_volume)
+                   chamfer_volume, revolve_volume, loft_volume, circle_loft_estimate, assert_box)
 from pngread import read_png, grey_row, grey_col, dark_runs
 
 OUT = workdir("_selftest")
@@ -25,8 +25,7 @@ def block(p, x=20, z=15, h=20):
 def closeup(doc, name, view, box, segs, scan="row", label=None):
     """Snap a close-up and check that the edge lines crossing the middle row (or column) of
     the PNG sit where doc.pixel() predicts for the given model-space edge segments."""
-    doc.snap(name, view, box=box)
-    W, H, rows = read_png(str(OUT / f"{name}.png"))
+    W, H, rows = read_png(doc.snap(name, view, box=box))   # snap()'s /mnt/c path, opened on Windows
     i = (H if scan == "row" else W) // 2 + 17           # a little off-centre, away from vertices
     seen = dark_runs(grey_row(rows, i) if scan == "row" else grey_col(rows, i))
     a, b = (1, 0) if scan == "row" else (0, 1)          # (scan coordinate, measured coordinate)
@@ -93,6 +92,16 @@ with Part(OUT / "st_draft.SLDPRT") as p:
     p.select_face(0, 10, 0, "+Y"); p.start_sketch()
     p.rect((-5, 10, -5), (5, 10, 5)); p.cut("Drafted pocket", 5, draft_deg=4)
     check("pocket 4 deg draft (narrows)", v - p.volume(), frustum(10, 10 - 10 * TAN4, 5))
+    inside = lambda y: (lambda e: e.lies_in("Y", y) and all(abs(q[0]) < 8 for q in (e.start, e.mid, e.end)))
+    check("edge_extent(): pocket half-width at the mouth", p.edge_extent(inside(10), "X")[1], 5)
+    check("edge_extent(): ...and at the floor (Z axis)", p.edge_extent(inside(5), "Z")[1], 5 - 5 * TAN4, tol=1e-6)
+    try:
+        assert_box("drafted part", p.bbox(), (-10, 0, -10, 10, 10, 10))
+        assert_box("drafted part, wrong", p.bbox(), (-10, 0, -10, 10, 11, 10)); ok = False
+    except AssertionError:
+        ok = True
+    results.append(ok)
+    print(f"{'PASS' if ok else 'FAIL'}  assert_box() passes the right box and raises on a wrong one")
     p.close()
 
 with Part(OUT / "st_loop.SLDPRT") as p:
@@ -343,6 +352,15 @@ with Part() as p:                                   # a cut turns the same way: 
     p.close()
 
 # lofts: two profiles make a ruled loft, so polygon lofts are exact by loft_volume() (Simpson)
+
+
+def est_ok(got, est, lo, hi, label):
+    """circle -> polygon lofts are not ruled: SolidWorks reads 0.03-0.6% under the estimate."""
+    gap = 1 - got / est
+    ok = lo <= gap <= hi
+    results.append(ok)
+    print(f"{'PASS' if ok else 'FAIL'}  circle_loft_estimate(): {label} reads {gap:.2e} under it "
+          f"(measured band {lo:.0e}..{hi:.0e})")
 sqr = lambda a, y: [(a, y, a), (-a, y, a), (-a, y, -a), (a, y, -a)]       # square corners on Y=y
 
 
@@ -393,12 +411,55 @@ with Part(OUT / "st_loft_hex.SLDPRT") as p:          # the circle -> hexagon tra
     ok = ngon(6, 10) * 20 < v < math.pi * 100 * 20
     results.append(ok)
     print(f"{'PASS' if ok else 'FAIL'}  circle -> hexagon loft between hexagonal prism and cylinder: {v:.3f}")
+    est_ok(v, circle_loft_estimate(((0, 0, 0), 10), hexagon), 2e-4, 5e-4, "circle -> hexagon")
     same("  tight bbox", [p.bbox()], [(-10, 0, -10, 10, 20, 10)])
     ring = [(10 * math.cos(t * math.pi / 90), 0, 10 * math.sin(t * math.pi / 90)) for t in range(180)]
     closeup(p, "loft_hex_top", "*Top", (-11, 20, -11, 11, 20, 11),
             list(zip(hexagon, hexagon[1:] + hexagon[:1])) + list(zip(ring, ring[1:] + ring[:1])),
             scan="col", label="hexagon top and circle base seen from above")
     p.save(); p.snaps("loft_hex", ("*Isometric", "*Front"))
+    p.close()
+
+with Part() as p:                                    # circle -> sharp 2.4:1 rectangle: the widest gap
+    s = two_profiles(p, lambda p: p.circle((0, 0, 0), 10), lambda p: p.rect((-12, 20, -5), (12, 20, 5)))
+    p.loft("Circle to rect", s)
+    est_ok(p.volume(), circle_loft_estimate(((0, 0, 0), 10), [(-12, 20, -5), (12, 20, 5)]), 5e-3, 7e-3,
+           "circle -> 24x10 rectangle")
+    p.close()
+
+with Part() as p:                                    # rect -> circle, circle picked elsewhere: same solid
+    s = two_profiles(p, lambda p: p.rect((-12, 0, -5), (12, 0, 5)), lambda p: p.circle((0, 20, 0), 10))
+    p.loft("Rect to circle", s, align=[(-12, 0, -5), (0, 20, 10)])
+    est_ok(p.volume(), circle_loft_estimate(((0, 20, 0), 10), [(-12, 0, -5), (12, 0, 5)]), 5e-3, 7e-3,
+           "reversed, circle picked at +Z (pick point makes no difference)")
+    p.close()
+
+with Part() as p:                                    # the duct: circle -> 120x60 R3, then exact features
+    s = two_profiles(p, lambda p: p.circle((0, 0, 0), 50),
+                     lambda p: p.rect((-60, 50, -30), (60, 50, 30), r=3), h=50)
+    p.loft("Duct transition", s)
+    est_ok(p.volume(), circle_loft_estimate(((0, 0, 0), 50), [(-60, 50, -30), (60, 50, 30)], r=3),
+           1.5e-4, 4e-4, "circle R50 -> 120x60 R3 duct")
+    v = p.volume()
+    p.select_face(55, 50, 0, "+Y"); p.start_sketch(); p.rect((-60, 50, -30), (60, 50, 30), r=3)
+    p.extrude("Collar", 15)
+    want = rr_area(60, 30, 3) * 15                    # reads ~0.8 mm^3 low once the body has a loft
+    check("exact extrude after a loft, to 1e-5 of the part", p.volume() - v, want, tol=1e-5 * p.volume())
+    v = p.volume()
+    p.select_face(55, 65, 0, "+Y"); p.start_sketch(); p.rect((-58, 65, -28), (58, 65, 28), r=1)
+    p.cut("Vent bore", 15)
+    check("exact cut after a loft", v - p.volume(), rr_area(58, 28, 1) * 15, tol=1e-5 * p.volume())
+    p.close()
+
+with Part() as p:                                    # loft cut: circle mouth -> rounded-rect floor
+    block(p, 20, 20, 30)
+    v = p.volume()
+    p.select_face(15, 30, 15, "+Y"); p.start_sketch(); p.circle((0, 30, 0), 12); s1 = p.end_sketch("Mouth")
+    p.plane("P10", "Top Plane", 10)
+    p.select_plane("P10"); p.start_sketch(); p.rect((-14, 10, -6), (14, 10, 6), r=2); s2 = p.end_sketch("Floor")
+    p.loft_cut("Socket", [s1, s2])
+    est_ok(v - p.volume(), circle_loft_estimate(((0, 30, 0), 12), [(-14, 10, -6), (14, 10, 6)], r=2),
+           7e-4, 1.3e-3, "loft cut circle R12 -> 28x12 R2")
     p.close()
 
 with Part() as p:                                    # square with 6 corners -> hexagon: ruled, exact
@@ -447,6 +508,34 @@ with Part() as p:                                    # loft cut: tapered square 
     p.select_plane("P15"); p.start_sketch(); p.rect((-3, 15, -3), (3, 15, 3)); s2 = p.end_sketch("Floor")
     p.loft_cut("Socket", [s1, s2])
     check("loft cut: square socket 10 -> 6 over 5 mm", v - p.volume(), frustum(10, 6, 5))
+    p.close()
+
+# renders: snap() turns the floor shadow off - in *Top it looked like a block beside the part
+def shadow_free(doc, label):
+    """Brightness 5 mm left of a 40 x 20 block in a *Top close-up (the shadow fell there)."""
+    rows = read_png(doc.snap("shadow_" + label, "*Top", box=(-35, 15, -15, 25, 15, 15)))[2]
+    c, r = doc.pixel((-25, 15, 0))
+    return rows[round(r)][3 * round(c)]
+
+
+with Part(OUT / "st_shadow.SLDPRT") as p:
+    block(p, 20, 10, 15)
+    p.save()
+    p._plain_scene = True                            # control: SolidWorks' default scene first
+    dark = shadow_free(p, "default")
+    p._plain_scene = False                           # then as snap() normally renders
+    g = shadow_free(p, "part")
+    ok = g > 170 and dark < 160
+    results.append(ok)
+    print(f"{'PASS' if ok else 'FAIL'}  part *Top snap has no floor shadow: grey {g} beside the part "
+          f"(default scene: {dark})")
+    with Assembly(OUT / "st_shadow.SLDASM") as a:
+        a.add(p.path)
+        g = shadow_free(a, "asm")
+        ok = g > 170
+        results.append(ok)
+        print(f"{'PASS' if ok else 'FAIL'}  assembly *Top snap has no floor shadow: grey {g}")
+        a.close()
     p.close()
 
 with Part() as p:                                   # traps: crossing the axis, two centrelines

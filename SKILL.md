@@ -22,7 +22,7 @@ Front or Right Plane, offset planes parallel to them, or flat axis-aligned faces
 (either direction) and blind/through-all cuts (either or both directions), optionally drafted
 (tapered); revolves and revolved cuts about a sketched centreline (full or partial angle,
 either way or symmetric); lofts and loft cuts between polygon, rectangle and circle
-profiles on parallel planes (e.g. circle -> hexagon); selecting edges by geometry; constant-radius fillets (convex and concave, single
+profiles on parallel planes (e.g. circle -> hexagon, hollow circle -> rectangle ducts); selecting edges by geometry; constant-radius fillets (convex and concave, single
 edges or whole tangent loops) and 45-degree chamfers; assemblies placed by origin with
 interference checks; section (cut-away) views and close-ups (zoom to a region, measurable in
 pixels) for images. Every one of these is covered by `scripts/selftest.py` against exact
@@ -90,6 +90,9 @@ raises if not. A same-named document from a *different* folder is never closed -
 probably the user's - so the build stops and asks for another name. So iterate by editing the
 script and re-running, not by patching the open model.
 
+Build the parts and their assembly in one script (as `examples/tapered_lid_box` does):
+`Assembly.add` needs the parts open, and one run keeps them consistent.
+
 When you finish, leave your documents open so the user can look at them in SolidWorks.
 
 ### API (all mm, model space)
@@ -114,13 +117,14 @@ When you finish, leave your documents open so the user can look at them in Solid
 | `extrude(name, depth, reverse=False, draft_deg=0)` | Boss along the sketch normal: outward from a face, +Y/+Z/+X from Top/Front/Right Plane; `reverse=True` the other way. Draft makes the profile shrink as it grows (`draft_outward=True` to grow) |
 | `cut(name, depth=None, reverse=False, both=False, draft_deg=0)` | Cut AGAINST the sketch normal: into material from a face, -Y/-Z/-X from Top/Front/Right Plane; `None` = through all; `reverse=True` the other way; `both=True` both ways (depth each side). Draft makes the pocket narrow as it deepens |
 | `edges(where)` | Edge records (`kind`, `start`, `mid`, `end`, `radius`, mm) filtered by a predicate; helpers `e.lies_in("Y", 20)`, `e.along("X")` |
+| `edge_extent(where, axis)` | (lo, hi) along an axis over the matching edges - e.g. a tapered seat's half-width at a height (exact on straight edges) |
 | `fillet(name, r, edges, propagate=False)` | Constant-radius fillet; `propagate=True` follows tangent edges (one edge of a rounded-rect loop does the loop) |
 | `chamfer(name, d, edges, propagate=False)` | 45-degree chamfer, `d` back along both faces; `propagate` as for fillets |
 | `report()` | Rebuild; print features, body count, volume (mm^3), bbox (mm) |
-| `bbox()`, `volume()` | The same numbers, for asserts (`bbox()` is tight, also on curved loft faces) |
-| `rr_area`, `drafted_volume`, `fillet_volume`, `chamfer_volume`, `revolve_volume`, `loft_volume`, `assert_close` | Exact-volume helpers (module-level in swlib) - see 4. Verify |
-| `snap(name, view)` / `snaps(prefix, views)` | Render PNGs next to the saved file; prints the `/mnt/c/...` path to Read |
-| `snap(name, view, box=(x0, y0, z0, x1, y1, z1))` | **Close-up**: zoom so that model-space box fills the image (any view, parts and assemblies, inside `section()`); prints px per mm. `snaps(..., box=)` too |
+| `bbox()`, `volume()`, `bodies()` | The same numbers, for asserts. `bbox()` is `(xmin, ymin, zmin, xmax, ymax, zmax)`, tight (also on curved loft faces), rounded to 0.001 mm; `bodies()` is a **list** (`len(p.bodies()) == 1`) |
+| `rr_area`, `drafted_volume`, `fillet_volume`, `chamfer_volume`, `revolve_volume`, `loft_volume`, `circle_loft_estimate`, `assert_close`, `assert_box` | Volume and check helpers (module-level in swlib) - see 4. Verify |
+| `snap(name, view)` / `snaps(prefix, views)` | Render PNGs next to the saved file; return and print the `/mnt/c/...` path to Read. `snaps("x")` names them `x_iso`, `x_front`, `x_right`, `x_top` (`_back`, `_left`, `_bottom`). Floor shadow and reflection are turned off, so what you see is geometry |
+| `snap(name, view, box=(x0, y0, z0, x1, y1, z1))` | **Close-up**: zoom so that model-space box fills the image (any view, parts and assemblies, inside `section()`); prints px per mm. Only the box's extent across the screen matters - in `*Front` give both z values the depth of the detail (the face, or the section plane). `snaps(..., box=)` too |
 | `doc.pixel((x, y, z))` | (column, row) of a model point in the last close-up - for checking a gap or position in the PNG |
 | `with doc.section("Z", offset=0):` | Display-only cut-away for the snaps inside the block (parts and assemblies); hides the +axis side so *Front/*Right/*Top/*Isometric look at the cut face |
 | `save(path=None)`, `close()` | Save as / close this document |
@@ -176,6 +180,10 @@ p.fillet("Rim fillet", 1, rim, propagate=True)     # one straight + propagate = 
   a filter that matches nothing, or two loops sharing a plane (e.g. the outer rim AND the
   cavity's top edge both lie in Y=H), is the usual mistake. Add `abs(e.mid[0]) < ...`-style
   conditions to separate them.
+- To chamfer or fillet only the outer loop of a face that also has holes (the bottom of a
+  plate), select one straight outer edge and `propagate=True`: the loop follows tangent edges
+  round the corners and leaves the hole circles alone.
+  `p.chamfer("Bottom chamfer", 1, p.edges(lambda e: e.lies_in("Y", 0) and e.lies_in("Z", -25) and e.along("X")), propagate=True)`
 - Edge records go stale after every feature; call `edges()` again rather than reusing them.
 - Fillet a concave edge (floor meeting wall) and SolidWorks adds material; a convex edge loses it.
 - A fillet bigger than it can properly fit often does **not** fail: SolidWorks builds a
@@ -189,7 +197,9 @@ p.fillet("Rim fillet", 1, rim, propagate=True)     # one straight + propagate = 
   later cuts and selections rely on.
 - Vertical corners of a footprint are simplest rounded in the sketch (`rect(..., r=)`); use a
   fillet when the edge only exists after several features. A fillet whose radius equals an
-  adjacent corner radius is fine (it blends into a spherical corner).
+  adjacent corner radius is fine (it blends into a spherical corner). So for "round all the
+  outside edges 2 mm": sketch the footprint with corner r = 2, then fillet the top and bottom
+  loops with r = 2 (a box's cavity corners can then be smaller than the outside ones).
 
 ### Draft (tapered walls)
 
@@ -288,10 +298,25 @@ p.loft("Circle to hex", [base, top])
 - **Round faces read slightly low**: SolidWorks' volume for lofted round faces (circle ->
   circle, rounded rectangles) is 4e-5..1e-4 below the exact value even when the face is an
   exact cone - compare those with a relative tolerance (`tol=want * 2e-4`). Planar-faced lofts
-  are exact. For a circle -> polygon there is no closed form: check the volume lies between
-  the polygon prism and the cylinder, and look at a `*Top` close-up of both ends.
+  are exact. Once a body has a lofted face, *later* exact features read up to ~2e-6 of the
+  whole part's volume off (0.8 mm^3 on a 0.5 L duct, even away from the loft): use
+  `tol=1e-5 * p.volume()` for them.
+- **Circle to polygon or rectangle has no exact volume** - the surface is not ruled, so don't
+  hunt for a formula (an agent spent minutes on one that held only for its own shape).
+  `circle_loft_estimate((centre, radius), profile, r)` gives an upper bound: SolidWorks read
+  0.03-0.6% below it on 8 lofts and loft cuts (most for an elongated, sharp-cornered end).
+  Assert `0 < 1 - got/est < 0.01` - it catches a wrong size, height or profile - and check
+  the shape with a section close-up. These lofts can't twist: the circle's pick point and the
+  loft direction gave identical solids.
 - Loft cuts: sketch the mouth on the part's face and the floor on a plane inside it, then
   `loft_cut()` - e.g. a tapered hex socket.
+- **Hollow transitions** (ducts, funnels, adapters with collars): build the outside solid
+  first (collar extrude, loft, collar extrude), then hollow it from the ends - cut each
+  collar's bore from its end face to the collar's depth, and `loft_cut()` between the two bore
+  floors with the profiles inset by the wall, on the same planes as the outer loft. Check the
+  walls with a `section("Y", offset=mid)` close-up measured by `pixel()`. An inset of `t`
+  in the profile plane leaves `t*cos(slope)` measured square to a sloping side (2 mm -> 1.86 mm
+  at 22 degrees) - say so if the sides are steep.
 - Proven only between profiles on parallel planes, one closed contour per sketch, with no
   guide curves or end tangency; the library refuses other cases.
 
@@ -321,15 +346,17 @@ A feature returning successfully only means SolidWorks made *something*. Check w
    no single image shows. swlib has the formulas, so don't re-derive them:
    `rr_area(a, b, r)` (rounded-rect area from half-extents), `drafted_volume(a, b, r, depth,
    deg)`, `fillet_volume(r, straight_len, corner_r)` / `chamfer_volume(...)` (a straight edge,
-   or a whole rounded-rect loop with Pappus corners), `revolve_volume(area, centroid_r, deg)`, `loft_volume(corners0, corners1)`, and
-   `assert_close(label, got, want)`.
+   or a whole rounded-rect loop with Pappus corners), `revolve_volume(area, centroid_r, deg)`, `loft_volume(corners0, corners1)`,
+   `circle_loft_estimate(...)` (a bound, see Lofts), `assert_close(label, got, want)` and
+   `assert_box(label, p.bbox(), want_box)`.
    `examples/tapered_lid_box/build.py` uses all of them.
 2. **Images.** Read the PNGs. Pick the views for this part: an isometric plus the orthographic
    view of every face you cut or that features exit through (e.g. `*Bottom` to prove a hole
    goes all the way, `*Left` for holes in a -X face) - pass them to `snaps()`. Check each
    feature exists, is on the intended face, and is in the right place relative to the others
-   (count the holes; see if the notch is open where you meant). The dark band beside the part
-   in some views is SolidWorks' floor shadow, not geometry. Images are rendered from the open
+   (count the holes; see if the notch is open where you meant). Lighting still shades inner
+   faces: a bright patch on a box floor under a side hole is light through the hole, not a
+   feature. Images are rendered from the open
    model; only rely on (and show the user) images from your latest successful run - earlier
    runs' PNGs with other names are left in the folder.
    For anything inside - a lip in its seat, standoffs in a deep box, a blind hole's depth -
@@ -348,7 +375,8 @@ A feature returning successfully only means SolidWorks made *something*. Check w
    ```
    To measure rather than eyeball, `doc.pixel(point)` gives where a model point lands in the
    last close-up, and `scripts/pngread.py` (stdlib only; runs under WSL `python3` too) reads
-   the PNG: `dark_runs(grey_row(rows, y))` lists the black edge lines crossing row `y`.
+   the PNG - `read_png(p.snap(...))` works inside the build script, the path is converted -
+   and `dark_runs(grey_row(rows, y))` lists the black edge lines crossing row `y`.
    Edges land within about a pixel of `pixel()`'s prediction (verified in selftest).
 3. **Assemblies.** Check the component boxes (printed by `add`, or `Assembly.box(comp)` in an
    assert) are where you intended **before**
@@ -356,7 +384,9 @@ A feature returning successfully only means SolidWorks made *something*. Check w
    while the lid was floating 12 mm above the base - true, and meaningless. Only the image
    showed it. (`Assembly.add` now places by origin and verifies, but keep looking.)
    Decide what the user's stated size means (usually the closed outside size, lid included),
-   say so, and assert `Assembly.bbox()` against it.
+   say so, and assert `Assembly.bbox()` against it. A stand-in for the contents (a 1.6 mm
+   plate for a PCB, sitting on the standoffs) lets `interference()` check the fit and shows
+   the headroom.
 
 If something is wrong, fix the script and re-run. If a failure is confusing, build a small
 probe part that does just the failing step and inspect it (print the picked face's normal,

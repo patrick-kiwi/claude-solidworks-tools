@@ -219,10 +219,74 @@ def loft_volume(profile0, profile1):
     return h / 6 * (area(profile0) + 4 * area(mid) + area(profile1))
 
 
+def circle_loft_estimate(circle, profile, r=0.0, n=400):
+    """Upper-bound ESTIMATE of a two-profile loft between a circle and a polygon or rounded
+    rectangle on a parallel plane (circle -> rect duct, circle -> hex socket). There is no
+    exact formula: SolidWorks' surface is not ruled. This is the ruled loft that pairs each
+    corner of the profile with the circle point in the same direction from the circle's
+    centre; SolidWorks' volume was 0.03-0.6% BELOW it on 8 lofts and loft cuts (0.03% for a
+    hexagon or a 2:1 rounded rect with small corners, 0.6% for a sharp 2.4:1 rectangle; the
+    more elongated and sharp-cornered the profile, the bigger the gap). So check
+    0 < 1 - got/estimate < 0.01 - that catches a wrong size, a wrong height or a missing
+    profile, not sub-percent errors.
+      circle  = (centre, radius), model mm, as passed to circle()
+      profile = the other end: polygon corners (>= 3, as polygon() returns / polyline() takes),
+                or the two opposite corners passed to rect(), with that rect's r.
+    The profile must surround the circle's axis (every direction from it meets the profile once)."""
+    (cen, rad) = circle
+    pts = [tuple(map(float, q)) for q in profile]
+    k = next(a for a in range(3) if len({round(q[a], 9) for q in pts}) == 1)
+    i, j = [a for a in range(3) if a != k]
+    line = lambda p, q: (lambda t: (p[0] + t * (q[0] - p[0]), p[1] + t * (q[1] - p[1])))
+    if len(pts) == 2:
+        (i0, i1), (j0, j1) = sorted(q[i] for q in pts), sorted(q[j] for q in pts)
+        if r <= 0:
+            vs = [(i1, j0), (i1, j1), (i0, j1), (i0, j0)]
+            segs = [line(p, q) for p, q in zip(vs, vs[1:] + vs[:1])]
+        else:
+            arc = lambda cu, cv, a0: (lambda t: (cu + r * math.cos(math.radians(a0 + 90 * t)),
+                                                 cv + r * math.sin(math.radians(a0 + 90 * t))))
+            segs = [line((i1, j0 + r), (i1, j1 - r)), arc(i1 - r, j1 - r, 0),
+                    line((i1 - r, j1), (i0 + r, j1)), arc(i0 + r, j1 - r, 90),
+                    line((i0, j1 - r), (i0, j0 + r)), arc(i0 + r, j0 + r, 180),
+                    line((i0 + r, j0), (i1 - r, j0)), arc(i1 - r, j0 + r, 270)]
+    else:
+        vs = [(q[i], q[j]) for q in pts]
+        if sum(p[0] * q[1] - q[0] * p[1] for p, q in zip(vs, vs[1:] + vs[:1])) < 0:
+            vs.reverse()                                       # counter-clockwise in (i, j)
+        segs = [line(p, q) for p, q in zip(vs, vs[1:] + vs[:1])]
+    cu, cv = cen[i], cen[j]
+    ang = [math.atan2(s(0)[1] - cv, s(0)[0] - cu) for s in segs]
+    turns = [(a1 - a0) % (2 * math.pi) for a0, a1 in zip(ang, ang[1:] + ang[:1])]
+    assert abs(sum(turns) - 2 * math.pi) < 1e-6, "the profile must surround the circle's axis"
+
+    def pt(h, u, v):
+        q = [0.0] * 3; q[k], q[i], q[j] = h, u, v
+        return tuple(q)
+    P, C = [], []
+    for s, a0, d in zip(segs, ang, turns):
+        for m in range(n):
+            t = m / n
+            P.append(pt(pts[0][k], *s(t)))
+            C.append(pt(cen[k], cu + rad * math.cos(a0 + d * t), cv + rad * math.sin(a0 + d * t)))
+    return loft_volume(C, P)
+
+
 def assert_close(label, got, want, tol=0.05):
-    """Print and assert a check, e.g. assert_close("cavity", v - p.volume(), rr_area(...) * depth)."""
+    """Print and assert a check, e.g. assert_close("cavity", v - p.volume(), rr_area(...) * depth).
+    Once the body has a lofted face, exact features read up to ~2e-6 of the WHOLE part's volume
+    off (0.8 mm^3 on a 0.5 L duct, even away from the loft): pass tol=1e-5 * p.volume()."""
     print(f"  check {label}: {got:.3f} vs {want:.3f}")
     assert abs(got - want) <= tol, f"{label}: got {got:.3f}, want {want:.3f}"
+
+
+def assert_box(label, got, want, tol=1e-3):
+    """Print and assert a bounding box (xmin, ymin, zmin, xmax, ymax, zmax), e.g.
+    assert_box("plate", p.bbox(), (-25, 0, -25, 25, 8, 25)). bbox() is rounded to 1e-3 mm."""
+    print(f"  check {label}: {tuple(got)} vs {tuple(want)}")
+    assert got is not None and len(got) == 6, f"{label}: no box ({got})"
+    bad = [a for a in range(6) if abs(got[a] - want[a]) > tol]
+    assert not bad, f"{label}: box {tuple(got)}, want {tuple(want)}"
 
 
 # ---------------------------------------------------------------- edges
@@ -262,6 +326,7 @@ class _Doc:
         self.doc = self.app.NewDocument(self.app.GetUserPreferenceStringValue(template_pref), 0, 0, 0)
         if self.doc is None:
             raise RuntimeError("NewDocument failed - check the default template in SolidWorks options.")
+        self._plain_scene = False
 
     def __enter__(self):
         return self
@@ -299,6 +364,13 @@ class _Doc:
         folder = PureWindowsPath(folder) if folder else (self.path.parent if self.path else None)
         assert folder, "pass folder= or construct with save_as="
         out = folder / f"{name}.png"
+        if not self._plain_scene:
+            # The floor shadow read as an extra block beside the part in *Top views, and the
+            # floor reflection as more geometry below it - turn both off (this document only).
+            scene = self.doc.GetActiveConfiguration.GetScene
+            scene.FloorShadows = False
+            scene.FloorReflections = False
+            self._plain_scene = True
         self.doc.ShowNamedView2(view, -1)
         self.doc.ViewZoomtofit2()
         frame = self._zoom_to(box) if box is not None else None
@@ -746,6 +818,18 @@ class Part(_Doc):
                     if where is None or where(rec):
                         out.append(rec)
         return out
+
+    def edge_extent(self, where, axis):
+        """(lo, hi) along `axis` ('X', 'Y' or 'Z') over the start, mid and end points of the
+        edges matching `where` - e.g. the half-width of a tapered seat at height y:
+            p.edge_extent(lambda e: e.lies_in("Y", y) and inside(e), "X")
+        Exact for straight edges (rounded-rect loops have them at the extremes); a full circle
+        or an arc that bulges past its mid point reads short."""
+        es = self.edges(where)
+        assert es, "edge_extent(): no edges match - check the filter against p.edges() output"
+        a = AXIS[axis.upper()]
+        vals = [q[a] for e in es for q in (e.start, e.mid, e.end)]
+        return min(vals), max(vals)
 
     def select_edges(self, edges):
         self.doc.ClearSelection2(True)

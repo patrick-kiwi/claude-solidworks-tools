@@ -16,7 +16,7 @@ Every feature is checked against an exact volume; the taper fit is checked by co
 lip's and seat's edge loops at the top and bottom of the taper.
 """
 import math
-from swlib import Part, Assembly, workdir, rr_area, drafted_volume, fillet_volume, assert_close
+from swlib import Part, Assembly, workdir, rr_area, drafted_volume, fillet_volume, assert_close, assert_box
 
 OUT = workdir("tapered_lid_box")
 
@@ -37,11 +37,11 @@ t = LIP_D * math.tan(math.radians(DRAFT))      # taper's inset over its depth (0
 # ---- helpers ----------------------------------------------------------------------------
 def x_extent(part, y):
     """Half-width of the edge loop lying in the plane Y=y, ignoring the outer perimeter
-    (the outer wall's edges share those planes: the rim, and the lid plate's underside)."""
-    inside = lambda e: all(abs(p[0]) < OX - 0.1 and abs(p[2]) < OZ - 0.1 for p in (e.start, e.mid, e.end))
-    es = part.edges(lambda e: e.lies_in("Y", y) and inside(e))
-    assert es, f"no edges at Y={y}"
-    return max(abs(c) for e in es for c in (e.start[0], e.mid[0], e.end[0]))
+    (the outer wall's edges share those planes: the rim, and the lid plate's underside).
+    Use axis "Z" for the other direction."""
+    inside = lambda e: (e.lies_in("Y", y) and
+                        all(abs(p[0]) < OX - 0.1 and abs(p[2]) < OZ - 0.1 for p in (e.start, e.mid, e.end)))
+    return part.edge_extent(inside, "X")[1]
 
 
 # ---- base ---------------------------------------------------------------------------------
@@ -122,7 +122,7 @@ with Assembly(OUT / "tl_box.SLDASM") as a:
     assert abs(Assembly.box(lid)[1] - (H - LIP_D)) < 1e-3, "lid not seated"
     assert not a.interference(), "lid and base clash"
     print("closed size", a.bbox())             # outer size of the closed box
-    assert a.bbox() == (-OX, 0, -OZ, OX, H + T, OZ), "closed box is not the intended size"
+    assert_box("closed box", a.bbox(), (-OX, 0, -OZ, OX, H + T, OZ))
     a.save(); a.snaps("asm", ("*Isometric", "*Front"))
     with a.section("Z"):                       # cut-away through the middle: lip in its seat
         a.snaps("asm_section", ("*Front", "*Isometric"))

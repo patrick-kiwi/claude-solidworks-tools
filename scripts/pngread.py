@@ -4,11 +4,25 @@ many colours the picture has; both are handled (plus grey and RGBA).
 
     from pngread import read_png, dark_runs
     w, h, rows = read_png(path)           # rows[y][3*x : 3*x+3] = (r, g, b), row 0 at the top
+                                          # path: what snap() returns (/mnt/c/...) or C:\\...
     dark_runs(grey_row(rows, y))          # centres of the black edge lines crossing row y
 """
-import struct, zlib
+import os, struct, zlib
+
+
+def local_path(path):
+    """/mnt/c/x.png <-> C:\\x.png as needed, so snap()'s WSL path also opens inside a build
+    script (which runs under Windows Python) and a Windows path opens from WSL python3."""
+    p = str(path)
+    if os.name == "nt" and p.startswith("/mnt/") and len(p) > 6 and p[6] == "/":
+        return p[5].upper() + ":\\" + p[7:].replace("/", "\\")
+    if os.name != "nt" and len(p) > 2 and p[1] == ":":
+        return "/mnt/" + p[0].lower() + p[2:].replace("\\", "/")
+    return p
+
+
 def read_png(path):
-    d = open(path, 'rb').read()
+    d = open(local_path(path), 'rb').read()
     assert d[:8] == b'\x89PNG\r\n\x1a\n', "not a PNG"
     pos, idat, pal = 8, b'', None
     while pos < len(d):
