@@ -1,0 +1,4 @@
+schema_version: "1.1"
+name: round-to-rect-duct-adapter
+expected_outcome: |
+  One hollow part about 80 mm long: a 100 mm OD round collar (15 mm) and a 120 x 60 mm outside rectangular collar (15 mm) joined by an untwisted lofted transition, with ~2 mm walls and an open passage end to end; verified with numbers, a section view and images.
