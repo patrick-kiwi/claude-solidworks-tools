@@ -62,8 +62,8 @@ API, gotchas) - read it first; this file is for *developing* the skill.
   out-of-process) -> `batch_calls()` (`CommandInProgress`), now 0.2 s - the tapered-lid example
   went to 36 s end to end; exact-volume helpers moved into swlib; `Assembly.bbox()`; proven that
   over-size fillets (r > face height or > pocket corner radius) silently build the wrong shape.
-- 2026-11-13: proved Front/Right/offset planes, revolves, polygons and lofts (selftest 59 ->
-  77). Loft finding: corners pair by pick point, else by sketch winding -> silent twist;
+- Roadmap items 1-3 (close-ups, Front/Right/offset planes, revolves) brought the selftest to
+  59; item 4 (polygons, lofts) to 77. Loft finding: corners pair by pick point, else by sketch winding -> silent twist;
   `loft()` always picks. `bbox()` now tight (`GetExtremePoint`).
 - Design insight now in SKILL.md: a taper turns size error into height error (e/tan(angle));
   default to a rim-stop fit with lip clearance (`FIT_CLEAR` in examples/tapered_lid_box).
