@@ -2,8 +2,9 @@
 
 A standalone Claude Code skill (`solidworks`) that drives the user's running SolidWorks from WSL
 over COM, builds parts/assemblies from Python scripts, and verifies them with rendered images,
-exact volumes and interference checks. `SKILL.md` is what the skill-using agent reads (workflow,
-API, gotchas) - read it first; this file is for *developing* the skill.
+exact volumes and interference checks. `SKILL.md` is what the skill-using agent reads on every
+build (workflow, API table, core gotchas); technique detail is in `references/*.md`, read on
+demand via pointers in SKILL.md - read both first; this file is for *developing* the skill.
 
 ## Environment (this machine)
 
@@ -23,8 +24,10 @@ API, gotchas) - read it first; this file is for *developing* the skill.
 - **Adding a technique:** look up the call with `scripts/sw_api.sh` (offline reflection over the
   install's interop DLLs) -> prototype in a throwaway part whose result is exactly computable ->
   add to `swlib.py` with gotchas in the docstring -> add a case to `scripts/selftest.py` ->
-  run it -> document in `SKILL.md`. A returned feature is not proof (the "equal distance"
-  chamfer returns a feature and removes nothing) - check volume and an image.
+  run it -> document in `references/<technique>.md` (keep SKILL.md a lean core: an API-table
+  row plus a 1-3 line pointer naming when to read the file and the traps that
+  bite without it). A returned feature is not proof (the "equal distance" chamfer returns a
+  feature and removes nothing) - check volume and an image.
 - **Run the selftest after any swlib change:** `scripts/sw_run.sh scripts/selftest.py`
   (~3.5 min, currently 109/109; it closes its own documents).
 - **One SolidWorks instance:** never run two SolidWorks jobs at once - test subagents run one at
@@ -89,12 +92,24 @@ API, gotchas) - read it first; this file is for *developing* the skill.
   are true offsets (t square to the slope). tapered_lid_box base now shells.
 - Iteration 7 (duct only, after shell): 6/6, the agent used shell() unprompted; 435 s /
   117k tokens (up from 329 s), spent on extra wall checks -> `wall_thickness` candidate.
+- Progressive-disclosure restructure (branch `progressive-disclosure`): SKILL.md 498 lines /
+  35 KB -> 336 / 25 KB core (API table kept complete as the index) + `references/`
+  (fillets-chamfers, draft-and-fits, revolves, lofts, shell, measuring-images, api-quirks), each
+  with a 1-5 line pointer in SKILL.md naming when to read it and the traps that bite without it.
+  Text moved verbatim; a fragment + number diff of old vs new found nothing dropped.
+- Iteration 8 (duct + bracket, after the restructure): 11/11. Duct 309 s / 97k (it. 6: 329 s /
+  94k, it. 7: 435 s / 117k), read lofts + shell + measuring-images (+ api-quirks for an optional
+  probe). Bracket 107 s / 63k (it. 5: 85 s / 60k, SKILL.md then 431 lines) - read no reference
+  files, as intended; single runs, so the bracket's small rise is noise. Both agents found the
+  right files without hunting. Their notes (not acted on - only on real need): filter
+  `edge_extent` loops on start+mid+end, not mid (outer corner arcs' mids fall inside); a public
+  px/mm or `wall_thickness()` helper; section render lines at shelled-loft corners (Check2 = 0);
+  mid-plane extrude (again); push-fit clearance guidance.
 
 ## Open items / next steps
 
-**Agreed with the user 2026-11-13:** next session restructures SKILL.md (progressive
-disclosure: core workflow in SKILL.md, technique detail in `references/`), then technique work
-STOPS. New techniques get added only when a real project hits a gap - the roadmap below is a
+**Agreed with the user 2026-11-13:** SKILL.md restructured for progressive disclosure (done,
+see History), and technique work now STOPS. New techniques get added only when a real project hits a gap - the roadmap below is a
 menu, not a queue.
 
 1. The original evals always pass now (the duct too, 3 runs); keep them as a regression
@@ -105,7 +120,6 @@ menu, not a queue.
    open it; none has). Consider moving grading material outside the skill directory before
    larger runs.
 3. Techniques to prove next: **see ROADMAP.md** (agreed order: ~~close-ups~~ (done), ~~Front/Right and
-   offset reference planes~~ (done), ~~revolves~~ (done), ~~polygons + lofts~~ (done), ~~shell~~ (done); **patterns are next** (hand-off notes in ROADMAP item 6;
-   first move Lofts/Revolves/Shell detail out of SKILL.md - it is at 498 lines), then mirror, sweep,
-   rib, countersinks, editing existing files). STL/STEP export is deliberately left to the user.
+   offset reference planes~~ (done), ~~revolves~~ (done), ~~polygons + lofts~~ (done), ~~shell~~ (done); patterns would be next (hand-off notes in ROADMAP item 6),
+   then mirror, sweep, rib, countersinks, editing existing files - only on real need). STL/STEP export is deliberately left to the user.
 4. Optionally run skill-creator's description optimisation for triggering accuracy.

@@ -3,7 +3,8 @@
 Agreed with the user on 2026-11-13. Work top to bottom; each item follows the CLAUDE.md
 "adding a technique" loop (look up with `scripts/sw_api.sh` -> prototype in a throwaway part
 with an exactly computable result -> `swlib.py` with gotchas in the docstring -> selftest case
--> SKILL.md), and gets its own commit. API names below are starting points to look up, not
+-> a `references/<technique>.md` file plus a pointer and API-table row in SKILL.md), and gets
+its own commit. API names below are starting points to look up, not
 verified signatures.
 
 **Deliberately not planned:** STL/STEP export. The user exports by hand after reviewing the
@@ -174,7 +175,7 @@ Findings:
   1443-point wall sampler from raw API (`face.GetUVBounds`, `GetSurface.Evaluate(u, v, 0, 0)`,
   `face.GetClosestPointOn`, inside `batch_calls()`, ~3 s; script kept in the workspace as
   probe_wall.py) and tried a "t x area / 2" volume check that read 0.26% off (now warned
-  against in SKILL.md). `sw_api.sh` now takes several patterns.
+  against in SKILL.md, now `references/shell.md`). `sw_api.sh` now takes several patterns.
 
 ## 6. Patterns (linear and circular) - NEXT
 
@@ -206,8 +207,8 @@ rib that is its own feature).
   spacing vs angle for a full 360 (EqualSpacing=True with 2*pi); patterning a cut that
   depends on a face which is not there at every instance (GeometryPattern=True vs False).
 - Then: `p.pattern(name, features, n, spacing, direction=("X"|edge), n2=..., spacing2=...)`
-  and `p.circular_pattern(name, features, n, axis=..., deg=360)`; document in SKILL.md
-  (now 498 lines - move Lofts/Revolves/Shell detail to references/ first, see below).
+  and `p.circular_pattern(name, features, n, axis=..., deg=360)`; document in a new
+  `references/patterns.md` with a pointer in SKILL.md's "Techniques with their own reference".
 
 ## Later candidates (not yet ordered)
 
@@ -226,10 +227,10 @@ rib that is its own feature).
   deliberately uneven wall (hand cavity, t*cos(slope)). Pairs with `measure_gap` below.
 - **Section render lines**: the duct agent saw short black lines at the inner rect-collar /
   loft corners in sections and *Top/*Bottom (Check2 = 0, wall exact) - probably tessellation
-  silhouettes; confirm and add a one-line note to SKILL.md.
+  silhouettes; confirm and add a one-line note to `references/lofts.md`.
 - **Push-fit guidance** (hose over a spigot, spigot into an opening): build nominal, expose a
   per-side FIT_ constant, suggest a test ring - the duct agent did this by analogy with
-  FIT_CLEAR; a sentence in SKILL.md's fit section would make it standard.
+  FIT_CLEAR; a sentence in `references/draft-and-fits.md` would make it standard.
 - **`measure_gap(p0, p1)` close-up helper**: nearest dark run to each `pixel()` prediction,
   in mm - three agents wrote ~15 lines of this; prove against the selftest's slot/gap
   close-ups.
@@ -239,7 +240,6 @@ rib that is its own feature).
   behind them (perfboard agent); a colour per component or on the cut face would help.
 - **Section profile from geometry** (intersect the body with a plane, e.g. a temporary split
   or `IBody2` methods): measure a loft's cross-section without image work (duct agent).
-- **SKILL.md size** (498 lines after Shell, ~35 KB): a simple-part agent found it long. Before
-  adding Patterns, move Revolves/Lofts/Draft/Shell detail into `references/` with pointers.
+- ~~**SKILL.md size**~~ done 2026-11-13: 498 lines / 35 KB -> 336-line core + `references/`.
 - **Editing the user's existing files**: highest value, highest risk given "never modify the
   user's documents" - design first (work on a copy saved under solidworks_work?), then prove.
