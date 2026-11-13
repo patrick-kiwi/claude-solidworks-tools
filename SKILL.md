@@ -342,6 +342,10 @@ p.shell("Shell", 2, [(0, 0, 0, "-Y"), (0, L, 0, "+Y")])   # duct/tube: both ends
 - **Order matters.** Fillet the outside edges first, then shell - the wall stays uniform. Cut
   holes and openings AFTER the shell: a hole cut before it gets its own wall (a through hole
   became a 2 mm tube standing in the cavity).
+- **Check a shelled loft by its wall, not its volume** - there is no exact volume, and
+  "t x half the surface area" read 0.26% off a duct whose wall sampled exactly 2.000 mm. Measure
+  the wall in section close-ups instead: the outer edge at two rows gives the slope, then
+  wall = horizontal width x cos(slope) (the duct case near the end of `scripts/selftest.py`).
 - A shell too thick for the part adds nothing; `shell()` raises. Open faces must be flat and
   pickable from outside (same rule as `select_face`).
 - Prefer it to "outer block minus a cavity cut" when the cavity must follow a curved or

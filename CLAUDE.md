@@ -26,7 +26,7 @@ API, gotchas) - read it first; this file is for *developing* the skill.
   run it -> document in `SKILL.md`. A returned feature is not proof (the "equal distance"
   chamfer returns a feature and removes nothing) - check volume and an image.
 - **Run the selftest after any swlib change:** `scripts/sw_run.sh scripts/selftest.py`
-  (~3 min, currently 89/89; it closes its own documents).
+  (~3.5 min, currently 109/109; it closes its own documents).
 - **One SolidWorks instance:** never run two SolidWorks jobs at once - test subagents run one at
   a time, and don't use SolidWorks yourself while one is running.
 - **The user's documents:** never close or modify SolidWorks documents this work didn't create.
@@ -83,17 +83,24 @@ API, gotchas) - read it first; this file is for *developing* the skill.
 - Iteration 6 (duct only, after the fixes): 6/6, 477 -> 329 s, 119k -> 94k tokens; the agent
   used the new estimate and recipe. Its notes -> read_png/close-up measuring docs, ROADMAP
   candidates (tangent loft ends, `measure_gap` helper).
+- Roadmap item 5 (shell): `p.shell(name, t, open_faces, outward)`, selftest 89 -> 109, all
+  exact. The feared traps (t >= fillet/corner radius) don't happen - inner edges just go
+  sharp; the real trap is holes cut before the shell becoming tubes. Shelled lofts/revolves
+  are true offsets (t square to the slope). tapered_lid_box base now shells.
+- Iteration 7 (duct only, after shell): 6/6, the agent used shell() unprompted; 435 s /
+  117k tokens (up from 329 s), spent on extra wall checks -> `wall_thickness` candidate.
 
 ## Open items / next steps
 
-1. The five original evals always pass now (they no longer show improvements); keep them as
-   a regression smoke test. New cases should stretch the skill: a knob with a hex socket
-   (revolve + polygon cut - no case uses revolves yet), and a shell case once shell is proven
-   (or re-run the duct and see whether the agent shells it).
+1. The original evals always pass now (the duct too, 3 runs); keep them as a regression
+   smoke test. New cases should stretch the skill: a knob with a hex socket (revolve +
+   polygon cut - no case uses revolves yet), a shelled revolve (funnel/cup with a hole cut
+   after the shell - tests the hole-before-shell trap), and a pattern case once item 6 is done.
 2. Test hygiene: agents can see `evals/` file names via `ls` of the skill dir (told not to
    open it; none has). Consider moving grading material outside the skill directory before
    larger runs.
 3. Techniques to prove next: **see ROADMAP.md** (agreed order: ~~close-ups~~ (done), ~~Front/Right and
-   offset reference planes~~ (done), ~~revolves~~ (done), ~~polygons + lofts~~ (done); **shell is next** (hand-off notes in ROADMAP item 5), then patterns, mirror, sweep,
+   offset reference planes~~ (done), ~~revolves~~ (done), ~~polygons + lofts~~ (done), ~~shell~~ (done); **patterns are next** (hand-off notes in ROADMAP item 6;
+   first move Lofts/Revolves/Shell detail out of SKILL.md - it is at 498 lines), then mirror, sweep,
    rib, countersinks, editing existing files). STL/STEP export is deliberately left to the user.
 4. Optionally run skill-creator's description optimisation for triggering accuracy.

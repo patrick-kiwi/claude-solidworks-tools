@@ -138,39 +138,79 @@ From the six agents' skill_issues.md (iteration 5, incl. the new round-to-rect d
 - `read_png()` takes snap()'s /mnt/c path under Windows Python; `assert_box()`,
   `Part.edge_extent()`; docs for the hollow-loft recipe and wall thinning on slopes.
 
-## 5. Shell (hollow a solid to a wall thickness) - NEXT
+## 5. Shell (hollow a solid to a wall thickness) - DONE (selftest 89 -> 109)
 
-Why: every box/enclosure build so far makes the cavity by hand ("outer body minus a cut").
-A shell with the top face removed is one call, and it hollows lofted or revolved shapes
-(a funnel, a knob, a duct) where a hand-made cavity would need a second matching loft.
+`p.shell(name, t, open_faces=[(x, y, z, normal), ...], outward=False)`,
+`select_face(..., append=True)`. Proven in selftest, all exact to 1e-3 mm^3 unless noted:
+open-top block ((40-4)(30-4)(20-2)), closed hollow body (no open face; still 1 body),
+outward, two open faces, R5 rounded block at t=2 (inner r3) and t=6 (inner corner sharp),
+r3 bottom fillet + t=2 (inner fillet r1, `fillet_volume`) and r2 fillet + t=3 (sharp),
+revolved cone frustum and lofted square frustum (inner side = a true offset plane: half-width
+shifts by `t*sqrt(1 + slope^2)`; a plain corner inset would read 2106 vs the true 2059.7),
+walls and floor of the open box at 2 mm in *Front section close-ups (to 1 px), a
+circle -> rect duct shelled with both ends open measures 1.999 mm square to its slope on
+both sides (section close-up; slope from two rows). `examples/tapered_lid_box` base now
+fillets the outside and then shells - every existing check passed unchanged.
+Findings:
+- `InsertFeatureShell(t, outward)` returns nothing. Success = feature count went up and the
+  newest feature's `GetTypeName2 == "Shell"`; `GetDefinition` (IShellFeatureData) gives back
+  Thickness, Direction (True = outward) and FacesRemovedCount - all asserted by `shell()`.
+- Open faces are plain selections (mark 0, appended); `SelectByID2(append=True)` across view
+  changes keeps the earlier picks. No face selected -> closed hollow body.
+- outward=True: the solid you drew becomes the cavity; bbox grows by t except at open faces.
+- The expected traps did NOT happen: t >= a convex corner/fillet radius (cylindrical and the
+  toroidal corner blends) builds a sharp inner edge, exactly; outward over concave r < t
+  pocket corners builds sharp corners, exactly. Only "too thick for the part" (t=16 on a
+  30 mm wide block) fails - silently, no feature; `shell()` raises.
+- Real trap: features cut BEFORE the shell are shelled too - a through hole became a 2 mm
+  tube standing in the cavity (exact: cavity minus a r+t cylinder). Cut holes after.
+- Fillet the outside first, then shell: inner gets r - t, wall uniform.
+- Not tested: non-planar open faces (select_face only picks flat axis-aligned faces),
+  multi-thickness shells (IShellFeatureData.MultipleThicknessFaces), multi-body parts,
+  shelling a body with a draft (expected fine - planar offsets were exact).
+- Eval (iteration 7, duct re-run): 6/6; the agent used `shell()` unprompted from the Hollow
+  transitions recipe, walls 2.001/1.999 mm square to the slope (iteration 6 by hand: t*cos).
+  Slower (329 -> 435 s, 94k -> 117k tokens), all of it optional verification: it wrote a
+  1443-point wall sampler from raw API (`face.GetUVBounds`, `GetSurface.Evaluate(u, v, 0, 0)`,
+  `face.GetClosestPointOn`, inside `batch_calls()`, ~3 s; script kept in the workspace as
+  probe_wall.py) and tried a "t x area / 2" volume check that read 0.26% off (now warned
+  against in SKILL.md). `sw_api.sh` now takes several patterns.
 
-- Look up: only `IModelDoc2.InsertFeatureShell(Thickness, Outward) -> Void` (2026 install;
-  `sw_api.sh 'IModelDoc2.InsertFeatureShell*'`). It returns nothing, so success must be
-  checked from the feature tree (`FeatureByPositionReverse(0)` type/name) and the volume.
-  Faces to remove are pre-selected (`select_face`, append with mark?) - find out whether it
-  needs a mark, and what happens with no face selected (a closed hollow body?).
-- Prove exactly: a 40 x 30 x 20 block shelled 2 mm with the top face open removes
-  (40-4)(30-4)(20-2) mm^3; outward=True grows the bbox by 2 mm per side instead. Then a
-  rounded-rect block (inner corner radius = r - t, so `rr_area` gives the cavity exactly),
-  a shelled revolve (Pappus) and a shelled frustum loft (`loft_volume` of the inset corners -
-  check whether SolidWorks' inset is a true offset; for a tapered wall it is not a plain
-  corner inset, so prove on the box first).
-- Check with a section close-up (`with p.section("Z"): p.snap(..., box=...)` + `pixel()`):
-  the wall must measure t px-exactly on both sides and on the floor.
-- Expected traps: thickness >= a fillet/corner radius on the inside fails or builds a
-  different shape (cf. the over-size fillet finding); shelling after fillets vs before.
-- Then: rewrite `examples/tapered_lid_box` or `rpi_enclosure` cavity with it only if it
-  keeps every existing check passing - otherwise just document.
-- The duct adapter is the motivating case: hollowed by hand (bores + inner loft cut) its wall
-  is t*cos(slope) square to the sloping sides (1.86 mm for 2 mm at 22 deg). A shell with both
-  end faces removed should give a true normal t - check with a mid-height section close-up
-  (no exact volume exists for a circle -> rect loft, so prove the shell on boxes/frustums
-  first). Then add an eval case or re-run `round-to-rect-duct-adapter` to see if agents use it.
+## 6. Patterns (linear and circular) - NEXT
+
+Why: vent-slot arrays, bolt circles, grip ribs round a knob, standoff grids. Agents currently
+draw every instance in one sketch (fine for holes, but not for a feature with fillets, or a
+rib that is its own feature).
+
+- Look up (2026 install): `IFeatureManager.FeatureLinearPattern5(Num1, Spacing1, Num2,
+  Spacing2, FlipDir1, FlipDir2, DName1, DName2, GeometryPattern, VaryInstance, 10 more...)`
+  and `FeatureCircularPattern5(Number, Spacing, FlipDirection, DName, GeometryPattern,
+  EqualSpacing, VaryInstance, Sync, BDir2, BSymmetric, Number2, Spacing2, DName2,
+  EqualSpacing2)`. Read-back: `GetDefinition` -> `ILinearPatternFeatureData`
+  (D1TotalInstances, D1Spacing, D1ReverseDirection, `GetTransform(i)` per instance -
+  use it to prove positions exactly) and presumably `ICircularPatternFeatureData`. Feature
+  type IDs: swFmLPattern = 6, swFmCirPattern = 5, swFmMirrorPattern = 7.
+- Selection marks are the unknown: the classic recipe is seed feature(s) mark 4, direction-1
+  reference (a straight edge or axis) mark 1, direction-2 mark 2; circular needs an axis
+  (a reference axis from `IModelDoc2.InsertAxis2`, or a cylindrical face / circular edge) -
+  prove which works under late binding (`feat.Select2(True, mark)`, `edge.obj.Select4` with
+  a SelectData carrying a mark, or `SelectByID2(..., mark, ...)`).
+- Direction trap to expect (cf. revolves/extrudes): which way does a pattern go along an edge
+  and does FlipDir behave? Prove by bbox, not volume (volume is direction-blind).
+- Prove exactly: n x a hole's volume (a row of 5 holes, a 3 x 4 grid, 6 holes on a bolt
+  circle - Pappus-free, each instance is a full cylinder), instance positions from
+  `GetTransform(i)` and a *Top close-up of the bolt circle (`pixel()` at each predicted
+  centre). Then a patterned boss with a fillet (feature pattern carries the fillet if it is
+  included in the seed set - check) and a circular pattern of a revolve-cut groove.
+- Expected traps: instances that run off the part (SolidWorks skips or fails them?); equal
+  spacing vs angle for a full 360 (EqualSpacing=True with 2*pi); patterning a cut that
+  depends on a face which is not there at every instance (GeometryPattern=True vs False).
+- Then: `p.pattern(name, features, n, spacing, direction=("X"|edge), n2=..., spacing2=...)`
+  and `p.circular_pattern(name, features, n, axis=..., deg=360)`; document in SKILL.md
+  (now 498 lines - move Lofts/Revolves/Shell detail to references/ first, see below).
 
 ## Later candidates (not yet ordered)
 
-- **Patterns**: linear and circular (`FeatureLinearPattern5`, `FeatureCircularPattern5`) - vent
-  slot arrays, bolt circles. Exact: n x feature volume.
 - **Mirror** (`InsertMirrorFeature2`) about a reference plane.
 - **Sweep** along a path (`InsertProtrusionSwept4`/`FeatureSweep`) - handles, cable channels.
 - **Rib** (`InsertRib`) - stiffeners in enclosures.
@@ -180,6 +220,16 @@ A shell with the top face removed is one call, and it hollows lofted or revolved
   with an 11-22 deg crease. Try loft end tangency (`InsertProtrusionBlend2` start/end
   tangency args) or extra profiles equal to the collar ends a few mm into the loft; check by
   a section image (no exact volume). Iteration-6 duct agent.
+- **`wall_thickness(face_filter)` helper** (iteration-7 duct agent): min/max distance from a
+  uv grid on the outer faces to the body's other faces via `GetClosestPointOn` - checks a
+  shell everywhere, not at two section points. Prove on a shelled frustum (exact t) and a
+  deliberately uneven wall (hand cavity, t*cos(slope)). Pairs with `measure_gap` below.
+- **Section render lines**: the duct agent saw short black lines at the inner rect-collar /
+  loft corners in sections and *Top/*Bottom (Check2 = 0, wall exact) - probably tessellation
+  silhouettes; confirm and add a one-line note to SKILL.md.
+- **Push-fit guidance** (hose over a spigot, spigot into an opening): build nominal, expose a
+  per-side FIT_ constant, suggest a test ring - the duct agent did this by analogy with
+  FIT_CLEAR; a sentence in SKILL.md's fit section would make it standard.
 - **`measure_gap(p0, p1)` close-up helper**: nearest dark run to each `pixel()` prediction,
   in mm - three agents wrote ~15 lines of this; prove against the selftest's slot/gap
   close-ups.
@@ -189,7 +239,7 @@ A shell with the top face removed is one call, and it hollows lofted or revolved
   behind them (perfboard agent); a colour per component or on the cut face would help.
 - **Section profile from geometry** (intersect the body with a plane, e.g. a temporary split
   or `IBody2` methods): measure a loft's cross-section without image work (duct agent).
-- **SKILL.md size** (461 lines, ~31 KB): a simple-part agent found it long. If it passes ~500
-  lines, move Revolves/Lofts/Draft detail into `references/` with pointers.
+- **SKILL.md size** (498 lines after Shell, ~35 KB): a simple-part agent found it long. Before
+  adding Patterns, move Revolves/Lofts/Draft/Shell detail into `references/` with pointers.
 - **Editing the user's existing files**: highest value, highest risk given "never modify the
   user's documents" - design first (work on a copy saved under solidworks_work?), then prove.
