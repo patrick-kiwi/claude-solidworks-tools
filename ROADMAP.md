@@ -76,6 +76,10 @@ round-fan-to-rectangular-vent ducts, tapered handles.
   circle -> circle (cone frustum: pi*h/3*(R^2 + Rr + r^2)). Then circle -> hexagon: no closed
   form, so check volume lies between the obvious bounds, end faces match the profiles (bbox,
   section), and look at close-ups.
+  Images can be proof too, not just a look: `snap(box=...)` + `doc.pixel(point)` predict
+  where an edge must land, and `scripts/pngread.py` (`read_png`, `dark_runs`) finds where it
+  did, to ~1 px (see `closeup()` in selftest.py). Use it for the loft's shape, e.g. the
+  silhouette width of a section at mid-height, or the hexagon's corners in a *Top close-up.
 - Expected trap: SolidWorks pairs the profiles' points by where each profile is selected, so a
   bad pick twists the loft. Find out how to control it (pick points / connectors /
   start-point alignment) and build that into the helper.
