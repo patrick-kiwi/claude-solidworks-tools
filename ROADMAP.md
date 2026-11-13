@@ -9,7 +9,13 @@ verified signatures.
 **Deliberately not planned:** STL/STEP export. The user exports by hand after reviewing the
 model in SolidWorks - that review is the point. Builds should end by inviting a review.
 
-## 1. Close-up images (zoom to area)
+## 1. Close-up images (zoom to area) - DONE
+
+`snap(name, view, box=...)` / `snaps(..., box=)` + `pixel(point)` + `scripts/pngread.py`.
+Proven in selftest: edge lines of a 0.5 mm slot land within ~1 px of the prediction in *Front,
+*Right, *Top, *Isometric and inside a section, and a 0.5 mm gap between assembly components
+measures 121 px at 242 px/mm. Trap found: `ViewZoomTo2` takes view-frame coordinates, not
+model space (correct by accident in *Front only).
 
 Why: the last two eval agents both wanted it - a 0.15 mm lid gap or a 0.26 mm taper is
 invisible when the view frames the whole model. Also needed to judge items 2-4 by eye.

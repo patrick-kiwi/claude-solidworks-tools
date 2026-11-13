@@ -17,8 +17,10 @@ Typical use:
         p.circle((10, 3, 0), 2.5); p.cut("Hole")               # through all
         p.report(); p.save(); p.snaps("bracket")
 """
+import itertools
 import math
 import os
+import struct
 import types
 from contextlib import contextmanager
 from dataclasses import dataclass
@@ -91,6 +93,14 @@ def wsl_path(win_path):
     if len(p) > 2 and p[1] == ":":
         return "/mnt/" + p[0].lower() + p[2:].replace("\\", "/")
     return p
+
+
+def _png_size(path):
+    """(width, height) from a PNG's header."""
+    with open(str(path), "rb") as f:
+        head = f.read(24)
+    assert head[:8] == b"\x89PNG\r\n\x1a\n", f"{path} is not a PNG"
+    return struct.unpack(">II", head[16:24])
 
 
 def open_docs(sw=None):
@@ -247,18 +257,60 @@ class _Doc:
     def close(self):
         self.app.CloseDoc(self.doc.GetTitle)
 
-    def snap(self, name, view="*Isometric", folder=None):
+    def snap(self, name, view="*Isometric", folder=None, box=None):
         """Save the model, seen from a named view, as PNG. Returns the WSL path to Read.
-        Images are rendered from the open model, not from the saved file."""
+        Images are rendered from the open model, not from the saved file.
+
+        box=(xmin, ymin, zmin, xmax, ymax, zmax) in model mm makes a CLOSE-UP: the view is
+        zoomed so that box's outline on screen fills the image (centred; the tighter of the two
+        screen directions decides the scale, so the other shows a bit more). Works in any named
+        view, for parts and assemblies, and inside section(). Leave a margin round the detail.
+        A close-up prints its scale (px per mm), and afterwards pixel(point) gives where a model
+        point lands in that image - e.g. a 0.15 mm gap at 200 px/mm should be ~30 px wide."""
         folder = PureWindowsPath(folder) if folder else (self.path.parent if self.path else None)
         assert folder, "pass folder= or construct with save_as="
         out = folder / f"{name}.png"
         self.doc.ShowNamedView2(view, -1)
         self.doc.ViewZoomtofit2()
+        frame = self._zoom_to(box) if box is not None else None
         self.doc.GraphicsRedraw2()
         self.doc.SaveAs3(str(out), 0, SAVE_COPY | SAVE_SILENT)
-        print(f"image: {wsl_path(out)}")
+        self._frame = None
+        note = ""
+        if frame:
+            W, H = _png_size(out)
+            R, (cx, cy), (w, h) = frame
+            k = min(W / w if w > 1e-9 else math.inf, H / h if h > 1e-9 else math.inf)
+            self._frame = (R, cx, cy, k, W, H)
+            note = f"  (close-up: 1 mm = {k:.1f} px, {W / k:.2f} x {H / k:.2f} mm visible)"
+        print(f"image: {wsl_path(out)}{note}")
         return wsl_path(out)
+
+    def _zoom_to(self, box):
+        """Zoom the current view onto a model-space box. ViewZoomTo2 takes its corners in the
+        VIEW's frame (screen x right, y up), not model space - in *Front the two coincide,
+        so model coordinates seem to work there and silently frame empty space in every other
+        view. So: rotate the box's 8 corners into the view frame (Orientation3, row-vector
+        p.R) and zoom to their screen extent."""
+        assert len(box) == 6 and all(box[i] <= box[i + 3] for i in range(3)), \
+            "box is (xmin, ymin, zmin, xmax, ymax, zmax) with min <= max"
+        R = val(self.doc.ActiveView.Orientation3).ArrayData[:9]
+        scr = [[sum(c[i] * R[i*3 + j] for i in range(3)) for j in range(2)]
+               for c in itertools.product(*[(box[i], box[i + 3]) for i in range(3)])]
+        lo = [min(p[j] for p in scr) for j in range(2)]
+        hi = [max(p[j] for p in scr) for j in range(2)]
+        w, h = hi[0] - lo[0], hi[1] - lo[1]
+        assert max(w, h) > 1e-6, "box has no extent on screen in this view"
+        self.doc.ViewZoomTo2(lo[0]*MM, lo[1]*MM, 0, hi[0]*MM, hi[1]*MM, 0)
+        return R, ((lo[0] + hi[0]) / 2, (lo[1] + hi[1]) / 2), (w, h)
+
+    def pixel(self, point):
+        """(column, row) of a model point (mm) in the LAST snap, which must be a close-up
+        (box=...). Row 0 is the top of the image. Measured accurate to about a pixel."""
+        assert getattr(self, "_frame", None), "pixel() needs the last snap to be a close-up (box=...)"
+        R, cx, cy, k, W, H = self._frame
+        sx, sy = (sum(point[i] * R[i*3 + j] for i in range(3)) for j in range(2))
+        return W / 2 + (sx - cx) * k - 0.5, H / 2 - (sy - cy) * k - 0.5
 
     @contextmanager
     def section(self, axis="Z", offset=0.0, reverse=False):
@@ -287,10 +339,12 @@ class _Doc:
             val(mvm.RemoveSectionView)
             self.doc.GraphicsRedraw2()
 
-    def snaps(self, prefix, views=DEFAULT_VIEWS, folder=None):
+    def snaps(self, prefix, views=DEFAULT_VIEWS, folder=None, box=None):
+        """snap() from each view, named <prefix>_iso, _front, ...; box= makes them close-ups."""
         names = {"*Isometric": "iso", "*Front": "front", "*Back": "back", "*Right": "right",
                  "*Left": "left", "*Top": "top", "*Bottom": "bottom"}
-        paths = [self.snap(f"{prefix}_{names.get(v, v.strip('*').lower())}", v, folder) for v in views]
+        paths = [self.snap(f"{prefix}_{names.get(v, v.strip('*').lower())}", v, folder, box)
+                 for v in views]
         self.doc.ShowNamedView2("*Isometric", -1)    # leave the user a useful view, not an edge-on one
         self.doc.ViewZoomtofit2()
         return paths

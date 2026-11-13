@@ -20,7 +20,8 @@ this way, and one was invisible to the numbers alone.
 Plane or flat axis-aligned faces; extrudes and blind/through-all cuts, optionally drafted
 (tapered); selecting edges by geometry; constant-radius fillets (convex and concave, single
 edges or whole tangent loops) and 45-degree chamfers; assemblies placed by origin with
-interference checks; section (cut-away) views for images. Every one of these is covered by `scripts/selftest.py` against exact
+interference checks; section (cut-away) views and close-ups (zoom to a region, measurable in
+pixels) for images. Every one of these is covered by `scripts/selftest.py` against exact
 volumes. Anything else (revolves, sweeps, angled sketch planes, drawings, exports, editing the
 user's existing files) is untested - see "Going beyond the proven scope" below.
 
@@ -104,6 +105,8 @@ When you finish, leave your documents open so the user can look at them in Solid
 | `bbox()`, `volume()` | The same numbers, for asserts |
 | `rr_area`, `drafted_volume`, `fillet_volume`, `chamfer_volume`, `assert_close` | Exact-volume helpers (module-level in swlib) - see 4. Verify |
 | `snap(name, view)` / `snaps(prefix, views)` | Render PNGs next to the saved file; prints the `/mnt/c/...` path to Read |
+| `snap(name, view, box=(x0, y0, z0, x1, y1, z1))` | **Close-up**: zoom so that model-space box fills the image (any view, parts and assemblies, inside `section()`); prints px per mm. `snaps(..., box=)` too |
+| `doc.pixel((x, y, z))` | (column, row) of a model point in the last close-up - for checking a gap or position in the PNG |
 | `with doc.section("Z", offset=0):` | Display-only cut-away for the snaps inside the block (parts and assemblies); hides the +axis side so *Front/*Right/*Top/*Isometric look at the cut face |
 | `save(path=None)`, `close()` | Save as / close this document |
 | `Assembly.add(part_path, origin)` | Insert an open part with its **origin** at `origin`; verifies placement |
@@ -233,8 +236,20 @@ A feature returning successfully only means SolidWorks made *something*. Check w
    render a section: `with p.section("Z"): p.snaps("x_section", ("*Front", "*Isometric"))`.
    It changes no geometry and costs a second or two, so don't build half-model copies.
    Place the cut through the feature (`offset`, mm along the axis) and not on a face - a cut
-   that coincides with a wall face shows nothing useful. The image frames the whole model, so
-   small details stay small; say so rather than over-reading them.
+   that coincides with a wall face shows nothing useful.
+   A whole-model image makes small details tiny: a 0.15 mm lid gap or a 0.3 mm taper step is
+   invisible. For those, render a **close-up**: `p.snap("lid_gap", "*Front", box=(...))` frames
+   that model-space box (give it a margin round the detail) and prints the scale, e.g.
+   `1 mm = 212.8 px`, so a 0.15 mm gap should show as a ~32 px band - combine with a section
+   to look at a fit from inside:
+   ```python
+   with a.section("Z", offset=5):                       # cut through the lip, not on a face
+       a.snap("lip_closeup", "*Front", box=(38, 18, 5, 46, 24, 5))
+   ```
+   To measure rather than eyeball, `doc.pixel(point)` gives where a model point lands in the
+   last close-up, and `scripts/pngread.py` (stdlib only; runs under WSL `python3` too) reads
+   the PNG: `dark_runs(grey_row(rows, y))` lists the black edge lines crossing row `y`.
+   Edges land within about a pixel of `pixel()`'s prediction (verified in selftest).
 3. **Assemblies.** Check the component boxes (printed by `add`, or `Assembly.box(comp)` in an
    assert) are where you intended **before**
    trusting `interference()`. In the first session the interference check said "0 clashes"
@@ -285,6 +300,8 @@ Known behaviour to expect:
 - **Speed.** Each COM call from WSL costs ~20 ms, so a loop over geometry (every edge, face or
   component) can take many seconds. Wrap such read-only loops in `with swlib.batch_calls():`
   (sets `CommandInProgress`, ~20x-60x faster, restored on exit); `edges()` already does.
+- **`ViewZoomTo2`** takes its corners in the view's screen frame, not model space - it only
+  looks right in *Front, where they coincide (handled by `snap(box=)`).
 - **`AddComponent5`** positions the component's bounding-box centre, not its origin (handled
   in `Assembly.add`).
 - **Enum values** aren't available by name under late binding; look them up with
@@ -301,8 +318,9 @@ Known behaviour to expect:
 - `scripts/sw_run.sh` - runs a script under Windows Python with swlib on the path
 - `scripts/sw_status.py` - preflight check
 - `scripts/sw_api.sh` - offline API signature / enum lookup
+- `scripts/pngread.py` - stdlib PNG reader and edge-line finder for measuring close-ups
 - `scripts/selftest.py` - regression test of every swlib feature against exact volumes; run it
-  after changing swlib (`sw_run.sh selftest.py`, about 30 s)
+  after changing swlib (`sw_run.sh selftest.py`, about 35 s)
 - `examples/rpi_enclosure/` - Raspberry Pi 4/5 case (base with standoffs and port cutouts, lid
   with locating lip and vents, assembly with interference check). Read it before a similar
   job; it shows the frame, constants and verification style in practice.

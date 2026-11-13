@@ -4,6 +4,7 @@ import math
 import time
 from swlib import (Part, Assembly, workdir, app, rr_area, drafted_volume, fillet_volume,
                    chamfer_volume)
+from pngread import read_png, grey_row, grey_col, dark_runs
 
 OUT = workdir("_selftest")
 TAN4 = math.tan(math.radians(4))
@@ -19,6 +20,26 @@ def check(label, got, want, tol=0.01):
 def block(p, x=20, z=15, h=20):
     p.select_plane("Top Plane"); p.start_sketch()
     p.rect((-x, 0, -z), (x, 0, z)); p.extrude("Block", h)
+
+
+def closeup(doc, name, view, box, segs, scan="row", label=None):
+    """Snap a close-up and check that the edge lines crossing the middle row (or column) of
+    the PNG sit where doc.pixel() predicts for the given model-space edge segments."""
+    doc.snap(name, view, box=box)
+    W, H, rows = read_png(str(OUT / f"{name}.png"))
+    i = (H if scan == "row" else W) // 2 + 17           # a little off-centre, away from vertices
+    seen = dark_runs(grey_row(rows, i) if scan == "row" else grey_col(rows, i))
+    a, b = (1, 0) if scan == "row" else (0, 1)          # (scan coordinate, measured coordinate)
+    want = []
+    for p, q in segs:
+        P, Q = doc.pixel(p), doc.pixel(q)
+        if (P[a] - i) * (Q[a] - i) <= 0 and P[a] != Q[a]:
+            want.append(P[b] + (i - P[a]) * (Q[b] - P[b]) / (Q[a] - P[a]))
+    want.sort()
+    ok = len(seen) == len(want) and all(abs(s - w) <= 1.5 for s, w in zip(seen, want))
+    results.append(ok)
+    print(f"{'PASS' if ok else 'FAIL'}  close-up {label or name}: edges at "
+          f"{[round(s) for s in seen]} px (want {[round(w, 1) for w in want]})")
 
 
 frustum = lambda a, b, h: h / 3 * (a*a + b*b + a*b)
@@ -98,6 +119,26 @@ with Part(OUT / "st_loop.SLDPRT") as p:
     check("propagated chamfer round the loop", v - p.volume(), chamfer_volume(d, 100, 5))
     p.close()
 
+# close-ups: a 0.5 mm slot must land on the predicted pixels in every view and in a section
+with Part(OUT / "st_zoom.SLDPRT") as p:
+    p.select_plane("Top Plane"); p.start_sketch()
+    p.rect((-20, 0, -5), (20, 0, 5)); p.extrude("Block", 10)
+    v = p.volume()
+    p.select_face(0, 10, 0, "+Y"); p.start_sketch()
+    p.rect((-0.25, 10, -6), (0.25, 10, 6)); p.cut("Slot", 4)          # open at both Z faces
+    check("0.5 mm slot", v - p.volume(), 0.5 * 4 * 10)
+    walls = [((x, 6, 5), (x, 10, 5)) for x in (-0.25, 0.25)]          # slot's vertical edges, +Z face
+    rims = [((x, 10, -5), (x, 10, 5)) for x in (-0.25, 0.25)]         # slot's top edges
+    closeup(p, "zoom_front", "*Front", (-1, 7, 5, 1, 11, 5), walls)
+    closeup(p, "zoom_right", "*Right", (20, 8, 3, 20, 12, 7), [((20, 0, 5), (20, 10, 5))])
+    closeup(p, "zoom_top", "*Top", (-1, 10, -1, 1, 10, 1), rims)
+    closeup(p, "zoom_iso", "*Isometric", (-1, 8, 3, 1, 10, 7),
+            walls + rims + [((0.25, 10, 5), (20, 10, 5))])
+    with p.section("Z", offset=1):                                    # cut face at Z=1
+        closeup(p, "zoom_section", "*Front", (-1, 7, 1, 1, 11, 1),
+                [((x, 6, 1), (x, 10, 1)) for x in (-0.25, 0.25)], label="in a section")
+    p.close()
+
 # fillet radius == plate thickness: exact (r > thickness also "succeeds" but builds another shape)
 with Part(OUT / "st_plate.SLDPRT") as p:
     p.select_plane("Top Plane"); p.start_sketch()
@@ -120,6 +161,10 @@ with Part(OUT / "st_plate.SLDPRT") as p:
         ok = len(a.interference()) > 0
         results.append(ok)
         print(f"{'PASS' if ok else 'FAIL'}  overlapping plate: interference found")
+        a.add(p.path, origin=(0, 4.5, 0))               # 0.5 mm above the stack: a visible gap
+        closeup(a, "zoom_asm_gap", "*Front", (20, 3.5, 20, 26, 7, 20),
+                [((20, y, 20), (26, y, 20)) for y in (4, 4.5, 6.5)], scan="col",
+                label="0.5 mm gap between assembly components")
         a.close()
     p.close()
 
