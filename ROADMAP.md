@@ -122,6 +122,22 @@ round-fan-to-rectangular-vent ducts, tapered handles.
   bad pick twists the loft. Find out how to control it (pick points / connectors /
   start-point alignment) and build that into the helper.
 
+## 4b. Iteration-5 eval fixes - DONE (selftest 77 -> 89)
+
+From the six agents' skill_issues.md (iteration 5, incl. the new round-to-rect duct case):
+- **Circle -> polygon/rect lofts are not ruled** - no exact volume. The duct agent's pairing
+  rule (each corner to the circle point in the same direction) matched its own part to 3e-4
+  but is off by up to 6e-3 on a sharp 2.4:1 rectangle; arc-length pairing is worse. Kept as
+  `circle_loft_estimate()`, an upper bound SolidWorks reads 0.03-0.6% under (8 lofts/cuts).
+  The circle's pick point and the loft direction make no difference (identical volumes).
+- After a loft, exact features read up to ~2e-6 of the whole part's volume off (0.8 mm^3 on
+  a 0.5 L part, even an extrude that doesn't touch the loft); cuts measured exact.
+- Floor shadow/reflection: `ISwScene.FloorShadows/FloorReflections` via
+  `doc.GetActiveConfiguration.GetScene`; snap() turns both off (parts and assemblies). Turning
+  the shadow back on afterwards does not bring it back in renders.
+- `read_png()` takes snap()'s /mnt/c path under Windows Python; `assert_box()`,
+  `Part.edge_extent()`; docs for the hollow-loft recipe and wall thinning on slopes.
+
 ## 5. Shell (hollow a solid to a wall thickness) - NEXT
 
 Why: every box/enclosure build so far makes the cavity by hand ("outer body minus a cut").
@@ -145,6 +161,11 @@ A shell with the top face removed is one call, and it hollows lofted or revolved
   different shape (cf. the over-size fillet finding); shelling after fillets vs before.
 - Then: rewrite `examples/tapered_lid_box` or `rpi_enclosure` cavity with it only if it
   keeps every existing check passing - otherwise just document.
+- The duct adapter is the motivating case: hollowed by hand (bores + inner loft cut) its wall
+  is t*cos(slope) square to the sloping sides (1.86 mm for 2 mm at 22 deg). A shell with both
+  end faces removed should give a true normal t - check with a mid-height section close-up
+  (no exact volume exists for a circle -> rect loft, so prove the shell on boxes/frustums
+  first). Then add an eval case or re-run `round-to-rect-duct-adapter` to see if agents use it.
 
 ## Later candidates (not yet ordered)
 
@@ -155,5 +176,20 @@ A shell with the top face removed is one call, and it hollows lofted or revolved
 - **Rib** (`InsertRib`) - stiffeners in enclosures.
 - **Countersunk / counterbored holes**: a countersink might already work as a cut with 45-deg
   draft (cone volume is exact) - prove before reaching for the Hole Wizard.
+- **Tangent loft ends / blended transitions**: a "smooth transition" duct meets its collars
+  with an 11-22 deg crease. Try loft end tangency (`InsertProtrusionBlend2` start/end
+  tangency args) or extra profiles equal to the collar ends a few mm into the loft; check by
+  a section image (no exact volume). Iteration-6 duct agent.
+- **`measure_gap(p0, p1)` close-up helper**: nearest dark run to each `pixel()` prediction,
+  in mm - three agents wrote ~15 lines of this; prove against the selftest's slot/gap
+  close-ups.
+- **Mid-plane extrude** (`END_MID_PLANE` already used by revolves): an L-bracket agent had to
+  make an offset plane just to centre a profile on Front Plane.
+- **Section views that are easier to read**: cut faces render the same grey as the faces
+  behind them (perfboard agent); a colour per component or on the cut face would help.
+- **Section profile from geometry** (intersect the body with a plane, e.g. a temporary split
+  or `IBody2` methods): measure a loft's cross-section without image work (duct agent).
+- **SKILL.md size** (461 lines, ~31 KB): a simple-part agent found it long. If it passes ~500
+  lines, move Revolves/Lofts/Draft detail into `references/` with pointers.
 - **Editing the user's existing files**: highest value, highest risk given "never modify the
   user's documents" - design first (work on a copy saved under solidworks_work?), then prove.

@@ -26,7 +26,7 @@ API, gotchas) - read it first; this file is for *developing* the skill.
   run it -> document in `SKILL.md`. A returned feature is not proof (the "equal distance"
   chamfer returns a feature and removes nothing) - check volume and an image.
 - **Run the selftest after any swlib change:** `scripts/sw_run.sh scripts/selftest.py`
-  (~2.5 min, currently 77/77; it closes its own documents).
+  (~3 min, currently 89/89; it closes its own documents).
 - **One SolidWorks instance:** never run two SolidWorks jobs at once - test subagents run one at
   a time, and don't use SolidWorks yourself while one is running.
 - **The user's documents:** never close or modify SolidWorks documents this work didn't create.
@@ -35,13 +35,20 @@ API, gotchas) - read it first; this file is for *developing* the skill.
 ## Testing the skill (skill-creator loop)
 
 - Test cases live in `evals/<case>/` (prompt.md, case.yaml, graders/) - skill-creator /
-  `claude plugin eval` format. Five cases: l-bracket-vertical-holes, perfboard-box-with-lid,
-  desk-cable-organizer, tapered-lid-sd-card-box, filleted-chamfered-plate.
-- Runs: one general-purpose subagent per case, given the skill path + prompt, told to put
+  `claude plugin eval` format. Six cases: l-bracket-vertical-holes, perfboard-box-with-lid,
+  desk-cable-organizer, tapered-lid-sd-card-box, filleted-chamfered-plate,
+  round-to-rect-duct-adapter (loft + hollow loft cut, added iteration 5).
+- Runs: one general-purpose subagent per case, **one at a time**, given the skill path +
+  prompt (and told not to open `evals/`), told to put
   scripts/PNGs/run_log.txt/final_message.md/skill_issues.md in
   `~/repos/solidworks-skill-workspace/iteration-N/<case>/with_skill/outputs/` (outside this
-  repo, local only) and to use `workdir("eval-<name>")`. No baseline runs (user agreed: light
-  testing). Save each run's timing.json from the task notification, grade into grading.json.
+  repo, local only). No baseline runs (user agreed: light testing). Save each run's
+  timing.json from the task notification, grade into grading.json; write each case's
+  eval_metadata.json (prompt + assertion texts from graders/) fresh per iteration.
+- **Fresh state per run:** use `workdir("eval<N>-<name>")` (iteration number in it - a reused
+  folder held old files that an agent mistook for its own), and close the previous run's
+  documents first: `scripts/sw_run.sh evals/close_eval_docs.py` (closes only eval/example/
+  selftest documents under solidworks_work). Eval agents leave theirs open, as the skill says.
 - Aggregate + viewer (skill-creator lives under `~/.claude/skills/synced/*/skill-creator`):
   `python3 -m scripts.aggregate_benchmark <iteration dir> --skill-name solidworks`, then
   `eval-viewer/generate_review.py <iteration dir> --skill-name solidworks --benchmark ... --static
@@ -67,14 +74,25 @@ API, gotchas) - read it first; this file is for *developing* the skill.
   `loft()` always picks. `bbox()` now tight (`GetExtremePoint`).
 - Design insight now in SKILL.md: a taper turns size error into height error (e/tan(angle));
   default to a rim-stop fit with lip clearance (`FIT_CLEAR` in examples/tapered_lid_box).
+- Iteration 5 (all five + new round-to-rect-duct-adapter): 34/34, every build passed its own
+  checks first run. SD box 363 -> 189 s, plate 188 -> 103 s; the duct took 477 s, mostly
+  inventing a volume check for its circle -> rounded-rect loft. Fixes (ROADMAP 4b, selftest
+  89): such lofts are not ruled - `circle_loft_estimate()` is an upper bound SolidWorks reads
+  0.03-0.6% under; after-loft volume noise; snap() turns off floor shadow/reflection;
+  `read_png()` takes snap()'s path; `assert_box()`, `edge_extent()`; hollow-loft docs.
+- Iteration 6 (duct only, after the fixes): 6/6, 477 -> 329 s, 119k -> 94k tokens; the agent
+  used the new estimate and recipe. Its notes -> read_png/close-up measuring docs, ROADMAP
+  candidates (tangent loft ends, `measure_gap` helper).
 
 ## Open items / next steps
 
-1. Re-run all five evals (iteration 5) to measure the batch_calls() speed-up end to end
-   (none of the five uses revolves or lofts yet - a funnel / knob-with-hex-socket case
-   would show whether agents find and use them).
-2. Test hygiene: agents can see `evals/` file names via `ls` of the skill dir (none opened
-   them). Consider moving grading material outside the skill directory before larger runs.
+1. The five original evals always pass now (they no longer show improvements); keep them as
+   a regression smoke test. New cases should stretch the skill: a knob with a hex socket
+   (revolve + polygon cut - no case uses revolves yet), and a shell case once shell is proven
+   (or re-run the duct and see whether the agent shells it).
+2. Test hygiene: agents can see `evals/` file names via `ls` of the skill dir (told not to
+   open it; none has). Consider moving grading material outside the skill directory before
+   larger runs.
 3. Techniques to prove next: **see ROADMAP.md** (agreed order: ~~close-ups~~ (done), ~~Front/Right and
    offset reference planes~~ (done), ~~revolves~~ (done), ~~polygons + lofts~~ (done); **shell is next** (hand-off notes in ROADMAP item 5), then patterns, mirror, sweep,
    rib, countersinks, editing existing files). STL/STEP export is deliberately left to the user.
