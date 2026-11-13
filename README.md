@@ -1,4 +1,4 @@
-# solidworks-skill
+# claude-solidworks-tools
 
 A standalone [Claude Code](https://claude.com/claude-code) skill that lets Claude drive a running
 SolidWorks on the Windows host from WSL: it builds parts and assemblies from Python scripts via the
@@ -7,7 +7,7 @@ COM API, then checks its own work with rendered images, measurements and interfe
 ## Install
 
 ```bash
-git clone <this repo> ~/repos/solidworks-skill
+git clone git@github.com:patrick-kiwi/claude-solidworks-tools.git ~/repos/solidworks-skill
 ln -s ~/repos/solidworks-skill ~/.claude/skills/solidworks
 ```
 
@@ -18,6 +18,7 @@ Requirements: WSL on a Windows machine with SolidWorks (tested: 2026), and a Win
 ## Layout
 
 - `SKILL.md` - what Claude reads: workflow, API reference, gotchas
+- `CLAUDE.md` - notes for developing the skill (environment, rules, testing, open items)
 - `scripts/swlib.py` - helper library (mm, model-space; verified face picking; assemblies by origin)
 - `scripts/sw_run.sh` - run a build script under Windows Python from WSL
 - `scripts/sw_status.py` - preflight check
