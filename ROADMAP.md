@@ -122,10 +122,32 @@ round-fan-to-rectangular-vent ducts, tapered handles.
   bad pick twists the loft. Find out how to control it (pick points / connectors /
   start-point alignment) and build that into the helper.
 
+## 5. Shell (hollow a solid to a wall thickness) - NEXT
+
+Why: every box/enclosure build so far makes the cavity by hand ("outer body minus a cut").
+A shell with the top face removed is one call, and it hollows lofted or revolved shapes
+(a funnel, a knob, a duct) where a hand-made cavity would need a second matching loft.
+
+- Look up: only `IModelDoc2.InsertFeatureShell(Thickness, Outward) -> Void` (2026 install;
+  `sw_api.sh 'IModelDoc2.InsertFeatureShell*'`). It returns nothing, so success must be
+  checked from the feature tree (`FeatureByPositionReverse(0)` type/name) and the volume.
+  Faces to remove are pre-selected (`select_face`, append with mark?) - find out whether it
+  needs a mark, and what happens with no face selected (a closed hollow body?).
+- Prove exactly: a 40 x 30 x 20 block shelled 2 mm with the top face open removes
+  (40-4)(30-4)(20-2) mm^3; outward=True grows the bbox by 2 mm per side instead. Then a
+  rounded-rect block (inner corner radius = r - t, so `rr_area` gives the cavity exactly),
+  a shelled revolve (Pappus) and a shelled frustum loft (`loft_volume` of the inset corners -
+  check whether SolidWorks' inset is a true offset; for a tapered wall it is not a plain
+  corner inset, so prove on the box first).
+- Check with a section close-up (`with p.section("Z"): p.snap(..., box=...)` + `pixel()`):
+  the wall must measure t px-exactly on both sides and on the floor.
+- Expected traps: thickness >= a fillet/corner radius on the inside fails or builds a
+  different shape (cf. the over-size fillet finding); shelling after fillets vs before.
+- Then: rewrite `examples/tapered_lid_box` or `rpi_enclosure` cavity with it only if it
+  keeps every existing check passing - otherwise just document.
+
 ## Later candidates (not yet ordered)
 
-- **Shell** (`InsertFeatureShell`): hollow a solid to a wall thickness - would replace the
-  "outer body minus cavity" pattern in the box examples. Exact check: outer minus inner volume.
 - **Patterns**: linear and circular (`FeatureLinearPattern5`, `FeatureCircularPattern5`) - vent
   slot arrays, bolt circles. Exact: n x feature volume.
 - **Mirror** (`InsertMirrorFeature2`) about a reference plane.

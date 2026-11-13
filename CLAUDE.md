@@ -62,15 +62,20 @@ API, gotchas) - read it first; this file is for *developing* the skill.
   out-of-process) -> `batch_calls()` (`CommandInProgress`), now 0.2 s - the tapered-lid example
   went to 36 s end to end; exact-volume helpers moved into swlib; `Assembly.bbox()`; proven that
   over-size fillets (r > face height or > pocket corner radius) silently build the wrong shape.
+- 2026-11-13: proved Front/Right/offset planes, revolves, polygons and lofts (selftest 59 ->
+  77). Loft finding: corners pair by pick point, else by sketch winding -> silent twist;
+  `loft()` always picks. `bbox()` now tight (`GetExtremePoint`).
 - Design insight now in SKILL.md: a taper turns size error into height error (e/tan(angle));
   default to a rim-stop fit with lip clearance (`FIT_CLEAR` in examples/tapered_lid_box).
 
 ## Open items / next steps
 
-1. Re-run all five evals (iteration 5) to measure the batch_calls() speed-up end to end.
+1. Re-run all five evals (iteration 5) to measure the batch_calls() speed-up end to end
+   (none of the five uses revolves or lofts yet - a funnel / knob-with-hex-socket case
+   would show whether agents find and use them).
 2. Test hygiene: agents can see `evals/` file names via `ls` of the skill dir (none opened
    them). Consider moving grading material outside the skill directory before larger runs.
 3. Techniques to prove next: **see ROADMAP.md** (agreed order: ~~close-ups~~ (done), ~~Front/Right and
-   offset reference planes~~ (done), ~~revolves~~ (done), ~~polygons + lofts~~ (done); then shell, patterns, mirror, sweep,
+   offset reference planes~~ (done), ~~revolves~~ (done), ~~polygons + lofts~~ (done); **shell is next** (hand-off notes in ROADMAP item 5), then patterns, mirror, sweep,
    rib, countersinks, editing existing files). STL/STEP export is deliberately left to the user.
 4. Optionally run skill-creator's description optimisation for triggering accuracy.
