@@ -70,7 +70,7 @@ API, gotchas) - read it first; this file is for *developing* the skill.
 1. Re-run all five evals (iteration 5) to measure the batch_calls() speed-up end to end.
 2. Test hygiene: agents can see `evals/` file names via `ls` of the skill dir (none opened
    them). Consider moving grading material outside the skill directory before larger runs.
-3. Candidate techniques (prove first): zoom-to-area for close-up images, revolves, sketching
-   on Front/Right planes (extrude direction from those is unverified), STL/STEP export,
-   opening and editing the user's existing files, countersunk holes.
+3. Techniques to prove next: **see ROADMAP.md** (agreed order: close-ups, Front/Right and
+   offset reference planes, revolves, polygons + lofts; then shell, patterns, mirror, sweep,
+   rib, countersinks, editing existing files). STL/STEP export is deliberately left to the user.
 4. Optionally run skill-creator's description optimisation for triggering accuracy.
