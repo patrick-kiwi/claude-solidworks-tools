@@ -92,6 +92,11 @@ API, gotchas) - read it first; this file is for *developing* the skill.
 
 ## Open items / next steps
 
+**Agreed with the user 2026-11-13:** next session restructures SKILL.md (progressive
+disclosure: core workflow in SKILL.md, technique detail in `references/`), then technique work
+STOPS. New techniques get added only when a real project hits a gap - the roadmap below is a
+menu, not a queue.
+
 1. The original evals always pass now (the duct too, 3 runs); keep them as a regression
    smoke test. New cases should stretch the skill: a knob with a hex socket (revolve +
    polygon cut - no case uses revolves yet), a shelled revolve (funnel/cup with a hole cut
