@@ -488,6 +488,7 @@ Known behaviour to expect:
 - `examples/rpi_enclosure/` - Raspberry Pi 4/5 case (base with standoffs and port cutouts, lid
   with locating lip and vents, assembly with interference check). Read it before a similar
   job; it shows the frame, constants and verification style in practice.
-- `examples/tapered_lid_box/` - box with a 4-degree tapered lid fit, concave and convex fillets,
+- `examples/tapered_lid_box/` - box with a 4-degree tapered lid fit, a shelled base (outside
+  fillet first, then `shell()`), concave and convex fillets,
   exact-volume checks for every feature, an edge-loop check that the lip and seat tapers
   match, and a cut-away of the closed assembly.

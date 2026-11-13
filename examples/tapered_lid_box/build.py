@@ -4,7 +4,8 @@ A lid whose lip is a tight vertical fit in the box binds or rattles once printin
 creep in. Here the top LIP_D of the box cavity is a seat drafted at DRAFT degrees, and the lid's
 lip is drafted to the same profile: the tapered faces are parallel, so the lid self-centres as
 it goes down and the gap only closes up as it seats. Also shows fillets: concave (floor-to-wall
-inside the box) and convex (outer edges).
+inside the box) and convex (outer edges), and a shell: the box is modelled as a solid,
+its outside edge filleted, then hollowed to WALL with the top open.
 
 Fit: "rim stop". The lid plate rests on the rim, which sets the closed height, and the lip is
 undersize by FIT_CLEAR per side so print error can't make it wedge before the plate lands
@@ -22,10 +23,11 @@ OUT = workdir("tapered_lid_box")
 
 OX, OZ, H, R_OUT = 35.0, 25.0, 30.0, 4.0      # outer half-extents, height, corner radius
 WALL, FLOOR = 2.0, 2.0
-IX, IZ, R_IN = OX - WALL, OZ - WALL, 2.0       # cavity half-extents and corner radius
-# R_IN = R_OUT - WALL keeps the wall uniform round the corners (smaller: thicker there, fine;
-# larger: thinner). With R_OUT <= WALL, use a small R_IN (e.g. 1) and accept thick corners.
-# keep F_FLOOR <= R_IN and the outer fillets <= R_OUT so the exact fillet volumes apply.
+IX, IZ, R_IN = OX - WALL, OZ - WALL, R_OUT - WALL   # cavity half-extents and corner radius
+# The shell makes every inside face WALL from its outside face, so the cavity corners are
+# R_OUT - WALL (sharp if R_OUT <= WALL) and the wall is uniform round them.
+# keep F_FLOOR <= R_IN and the outer fillets <= R_OUT so the exact fillet volumes apply;
+# the base fillet F_BASE < FLOOR leaves the inside floor edge sharp (it would be F_BASE - FLOOR).
 LIP_D, DRAFT = 4.0, 4.0                        # taper depth (mm) and angle (deg)
 FIT_CLEAR = 0.15                               # lip undersize per side (rim-stop fit)
 T = 2.0                                        # lid plate thickness
@@ -50,9 +52,17 @@ with Part(OUT / "tl_base.SLDPRT") as b:
     b.rect((-OX, 0, -OZ), (OX, 0, OZ), r=R_OUT); b.extrude("Body", H)
     assert_close("body", b.volume(), rr_area(OX, OZ, R_OUT) * H)
 
+    # convex fillet round the bottom outside edge - BEFORE the shell, so the wall follows it
     v = b.volume()
-    b.select_face(0, H, 0, "+Y"); b.start_sketch()
-    b.rect((-IX, H, -IZ), (IX, H, IZ), r=R_IN); b.cut("Cavity", H - FLOOR)
+    bottom_edge = b.edges(lambda e: e.lies_in("Y", 0) and e.lies_in("Z", -OZ) and e.along("X"))
+    b.fillet("Base edge fillet", F_BASE, bottom_edge, propagate=True)
+    straight = 4 * (OX - R_OUT) + 4 * (OZ - R_OUT)
+    assert_close("base edge fillet (removes)", v - b.volume(), fillet_volume(F_BASE, straight, R_OUT))
+
+    # hollow it: top face open, walls and floor WALL thick (WALL == FLOOR here)
+    assert WALL == FLOOR, "shell() makes one thickness - cut the cavity by hand for a different floor"
+    v = b.volume()
+    b.shell("Shell", WALL, [(0, H, 0, "+Y")])
     assert_close("cavity", v - b.volume(), rr_area(IX, IZ, R_IN) * (H - FLOOR))
 
     # tapered seat: from the rim, narrowing with depth until it is flush with the cavity wall
@@ -69,13 +79,6 @@ with Part(OUT / "tl_base.SLDPRT") as b:
     b.fillet("Floor fillet", F_FLOOR, floor_edge, propagate=True)
     straight = 4 * (IX - R_IN) + 4 * (IZ - R_IN)
     assert_close("floor fillet (adds)", b.volume() - v, fillet_volume(F_FLOOR, straight, R_IN))
-
-    # convex fillet round the bottom outside edge
-    v = b.volume()
-    bottom_edge = b.edges(lambda e: e.lies_in("Y", 0) and e.lies_in("Z", -OZ) and e.along("X"))
-    b.fillet("Base edge fillet", F_BASE, bottom_edge, propagate=True)
-    straight = 4 * (OX - R_OUT) + 4 * (OZ - R_OUT)
-    assert_close("base edge fillet (removes)", v - b.volume(), fillet_volume(F_BASE, straight, R_OUT))
 
     seat_top, seat_bottom = x_extent(b, H), x_extent(b, H - LIP_D)
     b.report(); b.save(); b.snaps("base", ("*Isometric", "*Top"))
