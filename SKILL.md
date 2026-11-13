@@ -1,6 +1,6 @@
 ---
 name: solidworks
-description: Drive the user's running SolidWorks from WSL/Linux - build parts and assemblies from Python scripts via the COM API (sketches, extrudes, cuts, revolves, lofts, draft/taper, fillets, chamfers), then check the result with rendered images, exact volumes and interference detection. Use this whenever the user wants something modelled, designed or built in SolidWorks or "in CAD" (enclosures, boxes, brackets, mounts, plates, spacers, knobs, bushings, funnels, nozzles, duct transitions, lids, tapered or press-fit lids, cases for a PCB or Raspberry Pi/Arduino, parts for 3D printing), wants edges rounded or two parts checked for fit, or mentions SolidWorks, SLDPRT or SLDASM files - even if they don't say "SolidWorks" and just ask you to "make a part" or "design a case".
+description: Drive the user's running SolidWorks from WSL/Linux - build parts and assemblies from Python scripts via the COM API (sketches, extrudes, cuts, revolves, lofts, shells, draft/taper, fillets, chamfers), then check the result with rendered images, exact volumes and interference detection. Use this whenever the user wants something modelled, designed or built in SolidWorks or "in CAD" (enclosures, boxes, brackets, mounts, plates, spacers, knobs, bushings, funnels, nozzles, duct transitions, lids, tapered or press-fit lids, cases for a PCB or Raspberry Pi/Arduino, parts for 3D printing), wants edges rounded or two parts checked for fit, or mentions SolidWorks, SLDPRT or SLDASM files - even if they don't say "SolidWorks" and just ask you to "make a part" or "design a case".
 ---
 
 # SolidWorks via COM
@@ -22,7 +22,8 @@ Front or Right Plane, offset planes parallel to them, or flat axis-aligned faces
 (either direction) and blind/through-all cuts (either or both directions), optionally drafted
 (tapered); revolves and revolved cuts about a sketched centreline (full or partial angle,
 either way or symmetric); lofts and loft cuts between polygon, rectangle and circle
-profiles on parallel planes (e.g. circle -> hexagon, hollow circle -> rectangle ducts); selecting edges by geometry; constant-radius fillets (convex and concave, single
+profiles on parallel planes (e.g. circle -> hexagon, hollow circle -> rectangle ducts); shells
+(hollowing to a wall thickness, faces left open, inward or outward); selecting edges by geometry; constant-radius fillets (convex and concave, single
 edges or whole tangent loops) and 45-degree chamfers; assemblies placed by origin with
 interference checks; section (cut-away) views and close-ups (zoom to a region, measurable in
 pixels) for images. Every one of these is covered by `scripts/selftest.py` against exact
@@ -102,7 +103,7 @@ When you finish, leave your documents open so the user can look at them in Solid
 | `Part(save_as)` / `Assembly(save_as)` | New document from the default template; use as a context manager |
 | `select_plane(name)` | Select "Top Plane", "Front Plane", "Right Plane" or a plane made with `plane()` |
 | `plane(name, base="Top Plane", offset)` | Parallel reference plane `offset` mm along base's normal (negative = the other side; base can be another `plane()`); position asserted, hidden from renders |
-| `select_face(x, y, z, "+X")` | Select the flat face through that point with that outward normal; verified |
+| `select_face(x, y, z, "+X", append=False)` | Select the flat face through that point with that outward normal; verified |
 | `start_sketch()` | Open a sketch on the selection |
 | `rect(p1, p2, r=0)` | Axis-aligned rectangle from two opposite corners; `r` rounds corners (must be < half the short side) |
 | `circle(centre, radius)` | Circle |
@@ -116,6 +117,7 @@ When you finish, leave your documents open so the user can look at them in Solid
 | `revolve_cut(name, deg=360, ...)` | Cut: remove what the revolved profile sweeps (grooves, bores); same direction rules |
 | `extrude(name, depth, reverse=False, draft_deg=0)` | Boss along the sketch normal: outward from a face, +Y/+Z/+X from Top/Front/Right Plane; `reverse=True` the other way. Draft makes the profile shrink as it grows (`draft_outward=True` to grow) |
 | `cut(name, depth=None, reverse=False, both=False, draft_deg=0)` | Cut AGAINST the sketch normal: into material from a face, -Y/-Z/-X from Top/Front/Right Plane; `None` = through all; `reverse=True` the other way; `both=True` both ways (depth each side). Draft makes the pocket narrow as it deepens |
+| `shell(name, t, open_faces=[(x, y, z, "+Y"), ...], outward=False)` | Hollow the solid to wall `t`, leaving those faces open (none: closed hollow body); see Shell |
 | `edges(where)` | Edge records (`kind`, `start`, `mid`, `end`, `radius`, mm) filtered by a predicate; helpers `e.lies_in("Y", 20)`, `e.along("X")` |
 | `edge_extent(where, axis)` | (lo, hi) along an axis over the matching edges - e.g. a tapered seat's half-width at a height (exact on straight edges) |
 | `fillet(name, r, edges, propagate=False)` | Constant-radius fillet; `propagate=True` follows tangent edges (one edge of a rounded-rect loop does the loop) |
@@ -311,14 +313,40 @@ p.loft("Circle to hex", [base, top])
 - Loft cuts: sketch the mouth on the part's face and the floor on a plane inside it, then
   `loft_cut()` - e.g. a tapered hex socket.
 - **Hollow transitions** (ducts, funnels, adapters with collars): build the outside solid
-  first (collar extrude, loft, collar extrude), then hollow it from the ends - cut each
-  collar's bore from its end face to the collar's depth, and `loft_cut()` between the two bore
-  floors with the profiles inset by the wall, on the same planes as the outer loft. Check the
-  walls with a `section("Y", offset=mid)` close-up measured by `pixel()`. An inset of `t`
-  in the profile plane leaves `t*cos(slope)` measured square to a sloping side (2 mm -> 1.86 mm
-  at 22 degrees) - say so if the sides are steep.
+  first (collar extrude, loft, collar extrude), then `shell()` it with both end faces open -
+  the wall is t square to every face, sloping ones included. (The hand-made way - bores plus
+  an inner `loft_cut()` with profiles inset by t - leaves only `t*cos(slope)` on sloping
+  sides: 1.86 mm for 2 mm at 22 degrees.) Check the walls with a section close-up measured by
+  `pixel()`.
 - Proven only between profiles on parallel planes, one closed contour per sketch, with no
   guide curves or end tangency; the library refuses other cases.
+
+### Shell (hollow a solid: open boxes, cups, funnels, ducts)
+
+Model the outside as a solid, then `p.shell("Shell", t, open_faces)` - each open face given
+like `select_face` (a point inside it and its outward normal):
+
+```python
+p.shell("Shell", 2, [(0, H, 0, "+Y")])                    # open-top box, 2 mm walls and floor
+p.shell("Shell", 2, [(0, 0, 0, "-Y"), (0, L, 0, "+Y")])   # duct/tube: both ends open
+```
+
+- **Inward (default) every remaining face moves in by exactly t, square to itself**, the
+  outside stays put. A W x D x H block open at the top loses (W-2t)(D-2t)(H-t); a rounded
+  corner or fillet of radius r is r - t inside, and simply sharp when t >= r (no failure,
+  exact). On sloping lofted/revolved sides the wall is t square to the slope (a duct measured
+  2.00 mm), unlike hollowing by hand. To check a shelled frustum, move each side plane in by t
+  (the inner half-width shifts by `t*sqrt(1 + slope^2)`, not t) - exact in the selftest.
+- `outward=True` keeps the solid you drew as the *cavity* (e.g. a sleeve round a part's
+  exact shape); walls grow outside it and the bbox grows by t except at the open faces.
+- **Order matters.** Fillet the outside edges first, then shell - the wall stays uniform. Cut
+  holes and openings AFTER the shell: a hole cut before it gets its own wall (a through hole
+  became a 2 mm tube standing in the cavity).
+- A shell too thick for the part adds nothing; `shell()` raises. Open faces must be flat and
+  pickable from outside (same rule as `select_face`).
+- Prefer it to "outer block minus a cavity cut" when the cavity must follow a curved or
+  sloping outside; the hand-made cavity is still fine (and easy to reason about) for plain
+  boxes with features that differ inside and out.
 
 ### Design habits that avoid failures
 
@@ -346,7 +374,7 @@ A feature returning successfully only means SolidWorks made *something*. Check w
    no single image shows. swlib has the formulas, so don't re-derive them:
    `rr_area(a, b, r)` (rounded-rect area from half-extents), `drafted_volume(a, b, r, depth,
    deg)`, `fillet_volume(r, straight_len, corner_r)` / `chamfer_volume(...)` (a straight edge,
-   or a whole rounded-rect loop with Pappus corners), `revolve_volume(area, centroid_r, deg)`, `loft_volume(corners0, corners1)`,
+   or a whole rounded-rect loop with Pappus corners), `revolve_volume(area, centroid_r, deg)`, `loft_volume(corners0, corners1)` (shells: see Shell),
    `circle_loft_estimate(...)` (a bound, see Lofts), `assert_close(label, got, want)` and
    `assert_box(label, p.bbox(), want_box)`.
    `examples/tapered_lid_box/build.py` uses all of them.
@@ -456,7 +484,7 @@ Known behaviour to expect:
 - `scripts/sw_api.sh` - offline API signature / enum lookup
 - `scripts/pngread.py` - stdlib PNG reader and edge-line finder for measuring close-ups
 - `scripts/selftest.py` - regression test of every swlib feature against exact volumes; run it
-  after changing swlib (`sw_run.sh selftest.py`, about 2.5 minutes)
+  after changing swlib (`sw_run.sh selftest.py`, about 3 minutes)
 - `examples/rpi_enclosure/` - Raspberry Pi 4/5 case (base with standoffs and port cutouts, lid
   with locating lip and vents, assembly with interference check). Read it before a similar
   job; it shows the frame, constants and verification style in practice.

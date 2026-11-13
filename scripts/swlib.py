@@ -497,9 +497,9 @@ class Part(_Doc):
         assert f.Visible == VISIBILITY_HIDDEN, f"could not hide plane {name!r}"
         return f
 
-    def select_face(self, x, y, z, normal):
+    def select_face(self, x, y, z, normal, append=False):
         """Select the face through model point (x,y,z) whose outward normal is `normal`
-        ('+X','-X','+Y','-Y','+Z','-Z').
+        ('+X','-X','+Y','-Y','+Z','-Z'). append=True adds it to the current selection.
 
         Picking by coordinate is a ray cast from the CURRENT view, and SolidWorks rotates the
         view whenever a sketch starts - so a naive pick silently grabs whichever face is in front
@@ -508,10 +508,14 @@ class Part(_Doc):
         Consequence: the face must be visible from outside along its normal (not hidden behind
         other geometry)."""
         self.doc.ShowNamedView2(VIEW_FOR[normal], -1)
-        self.doc.ClearSelection2(True)
-        ok = self.doc.Extension.SelectByID2("", "FACE", x*MM, y*MM, z*MM, False, 0, NOTHING, 0)
-        assert ok, f"no face found at ({x}, {y}, {z}) looking from {VIEW_FOR[normal]}"
-        face = self.doc.SelectionManager.GetSelectedObject6(1, -1)
+        sel = self.doc.SelectionManager
+        if not append:
+            self.doc.ClearSelection2(True)
+        n0 = sel.GetSelectedObjectCount2(-1)
+        ok = self.doc.Extension.SelectByID2("", "FACE", x*MM, y*MM, z*MM, append, 0, NOTHING, 0)
+        assert ok and sel.GetSelectedObjectCount2(-1) == n0 + 1, \
+            f"no face found at ({x}, {y}, {z}) looking from {VIEW_FOR[normal]} (or already selected)"
+        face = sel.GetSelectedObject6(n0 + 1, -1)
         n = val(face.Normal)
         want = [0.0, 0.0, 0.0]
         want[AXIS[normal[1]]] = 1.0 if normal[0] == "+" else -1.0
@@ -796,6 +800,49 @@ class Part(_Doc):
         """Cut: remove the lofted region between the profiles (e.g. a tapered or circle-to-hex
         socket, sketched on a face and on a plane inside the part). Same rules as loft()."""
         return self._loft(name, profiles, align, True)
+
+    # ---- shell
+    def shell(self, name, thickness, open_faces=(), outward=False):
+        """Hollow the solid to a wall `thickness` mm, leaving `open_faces` open - each given
+        as (x, y, z, normal) like select_face(), e.g. [(0, H, 0, "+Y")] for an open-top box,
+        or both end faces of a duct. No open faces: a closed hollow body (still 1 body).
+
+        Inward (default): every remaining face moves in by exactly `thickness`, measured square
+        to the face - also on sloping lofted or revolved sides (proven exact on a lofted and a
+        revolved frustum; a duct's wall measured 2.0 mm square to its slope). The outside
+        is unchanged. So a W x D x H block with the top open loses (W-2t)(D-2t)(H-t), and a
+        rounded corner of radius r becomes r - t inside - or a SHARP corner when t >= r (no
+        failure, exact either way); the same for filleted edges.
+        outward=True keeps the original solid as the cavity and grows walls outside it: the
+        bbox grows by t on every side except the open faces.
+
+        Traps (measured):
+        - Holes and pockets cut BEFORE the shell get walls of their own: a through hole
+          becomes a tube of wall t standing in the cavity. Cut holes after the shell (from
+          outside, through the wall) unless you want that sleeve.
+        - Fillet the outside first, then shell: the wall stays uniform and the inside gets
+          r - t rounds.
+        - Too thick for the part: SolidWorks adds no feature and says nothing; raised here.
+        InsertFeatureShell returns nothing, so success is read from the feature tree and the
+        shell's own data (thickness, direction, faces removed) is asserted."""
+        self.doc.ClearSelection2(True)
+        for i, (x, y, z, normal) in enumerate(open_faces):
+            self.select_face(x, y, z, normal, append=i > 0)
+        n_feat = self.doc.GetFeatureCount
+        self.doc.InsertFeatureShell(thickness*MM, outward)
+        f = self.doc.FeatureByPositionReverse(0)
+        if self.doc.GetFeatureCount == n_feat or f.GetTypeName2 != "Shell":
+            self.doc.ClearSelection2(True)
+            raise RuntimeError(f"shell {name!r} FAILED - usual cause: thickness {thickness} is "
+                               f"too big for the part (more than half its thinnest section)")
+        self._named(f, name, "shell")
+        d = val(f.GetDefinition)
+        assert abs(d.Thickness / MM - thickness) < 1e-9 and bool(d.Direction) == bool(outward) \
+            and d.FacesRemovedCount == len(open_faces), \
+            f"shell {name!r} built with t={d.Thickness / MM}, outward={d.Direction}, " \
+            f"{d.FacesRemovedCount} faces open - wanted {thickness}, {outward}, {len(open_faces)}"
+        self.doc.ClearSelection2(True)
+        return f
 
     # ---- edges, fillets, chamfers
     def edges(self, where=None):

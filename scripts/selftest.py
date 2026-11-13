@@ -538,6 +538,125 @@ with Part(OUT / "st_shadow.SLDPRT") as p:
         a.close()
     p.close()
 
+# shell: every remaining face moves in by exactly t (square to the face), or out with outward=True
+TOP = [(10, 20, 0, "+Y")]                           # the 20 mm block's top face, clear of a centre hole
+with Part(OUT / "st_shell.SLDPRT") as p:
+    block(p)                                        # 40 x 20 x 30 -> open-top box, 2 mm walls
+    v = p.volume()
+    p.shell("Shell", 2, TOP)
+    check("shell 2 mm, top open = (40-4)(30-4)(20-2)", v - p.volume(), 36 * 26 * 18)
+    same("  outside unchanged", [p.bbox()], [(-20, 0, -15, 20, 20, 15)])
+    p.save()
+    with p.section("Z"):                             # walls and floor measure t in a cut-away
+        for x0, label in ((-20, "left"), (18, "right")):
+            closeup(p, f"shell_wall_{label}", "*Front", (x0 - 1, 8, 0, x0 + 3, 12, 0),
+                    [((x, 0, 0), (x, 20, 0)) for x in (x0, x0 + 2)], label=f"shell {label} wall 2 mm")
+        closeup(p, "shell_floor", "*Front", (-2, -1, 0, 2, 3, 0),
+                [((-5, y, 0), (5, y, 0)) for y in (0, 2)], scan="col", label="shell floor 2 mm")
+    p.close()
+
+with Part() as p:
+    block(p); v = p.volume()
+    p.shell("Closed shell", 2)
+    check("shell with no open face = closed hollow body", v - p.volume(), 36 * 26 * 16)
+    check("  still one body", len(p.bodies()), 1, tol=0)
+    p.close()
+
+with Part() as p:
+    block(p)
+    p.shell("Outward shell", 2, TOP, outward=True)
+    check("outward shell: the block becomes the cavity", p.volume(), 44 * 34 * 22 - 40 * 30 * 20)
+    same("  bbox grows 2 mm except at the open top", [p.bbox()], [(-22, -2, -17, 22, 20, 17)])
+    p.close()
+
+with Part() as p:
+    block(p); v = p.volume()
+    p.shell("Two open faces", 2, TOP + [(0, 10, 15, "+Z")])
+    check("shell with top and front open", v - p.volume(), 36 * 28 * 18)
+    p.close()
+
+for r, t in ((5, 2), (5, 6)):                        # rounded corners: r - t inside, sharp once t >= r
+    with Part() as p:
+        p.select_plane("Top Plane"); p.start_sketch()
+        p.rect((-20, 0, -15), (20, 0, 15), r=r); p.extrude("Rounded block", 20)
+        v = p.volume()
+        p.shell("Shell", t, TOP)
+        check(f"shell {t} mm of an R{r} rounded block (inner r = {max(r - t, 0)})", v - p.volume(),
+              rr_area(20 - t, 15 - t, max(r - t, 0)) * (20 - t))
+        p.close()
+
+for fr, t in ((3, 2), (2, 3)):                       # filleted bottom loop, then shell
+    with Part() as p:
+        p.select_plane("Top Plane"); p.start_sketch()
+        p.rect((-20, 0, -15), (20, 0, 15), r=5); p.extrude("Rounded block", 20)
+        one = [e for e in p.edges(lambda e: e.lies_in("Y", 0)) if e.along("X")][:1]
+        p.fillet("Bottom fillet", fr, one, propagate=True)
+        v = p.volume()
+        p.shell("Shell", t, TOP)
+        cavity = rr_area(20 - t, 15 - t, 5 - t) * (20 - t) - (fillet_volume(fr - t, 4 * 15 + 4 * 10, 5 - t) if fr > t else 0)
+        check(f"shell {t} mm after an r{fr} bottom fillet (inner fillet {max(fr - t, 0)})", v - p.volume(), cavity)
+        p.close()
+
+with Part() as p:                                    # trap: a hole cut before the shell becomes a tube
+    block(p)
+    p.select_face(0, 20, 0, "+Y"); p.start_sketch(); p.circle((0, 20, 0), 3); p.cut("Hole")
+    v = p.volume()
+    p.shell("Shell", 2, TOP)
+    check("hole cut before the shell becomes a 2 mm tube", v - p.volume(),    # r3 bore was empty already,
+          36 * 26 * 18 - math.pi * 5 ** 2 * 18)                               # the r3..r5 tube stays
+    p.close()
+
+with Part() as p:                                    # revolved frustum: inner wall a true offset
+    p.select_plane("Front Plane"); p.start_sketch(); p.centreline((0, 0, 0), (0, 1, 0))
+    p.polyline([(0, 0, 0), (15, 0, 0), (8, 20, 0), (0, 20, 0)]); p.revolve("Frustum")
+    v = p.volume()
+    p.shell("Shell", 2, [(0, 20, 0, "+Y")])
+    rad = lambda y: 15 - 7 * y / 20 - 2 * math.hypot(7, 20) / 20      # side moved 2 mm square to itself
+    check("shelled revolved frustum (true offset, cone frustum)", v - p.volume(),
+          math.pi * 18 / 3 * (rad(2) ** 2 + rad(2) * rad(20) + rad(20) ** 2))
+    p.close()
+
+with Part() as p:                                    # lofted square frustum, same rule
+    s = two_profiles(p, lambda p: p.rect((-10, 0, -10), (10, 0, 10)), lambda p: p.polyline(sqr(5, 20)))
+    p.loft("Frustum", s)
+    v = p.volume()
+    p.shell("Shell", 2, [(0, 20, 0, "+Y")])
+    hw = lambda y: 10 - y / 4 - 2 * math.hypot(1, 1 / 4)              # not a plain 2 mm corner inset
+    check("shelled loft frustum (true offset)", v - p.volume(), frustum(2 * hw(2), 2 * hw(20), 18))
+    p.close()
+
+with Part() as p:                                    # too thick: SolidWorks adds nothing, silently
+    block(p)
+    try:
+        p.shell("Too thick", 16, TOP); ok = False
+    except RuntimeError:
+        ok = p.features == ["Block"]
+    results.append(ok)
+    print(f"{'PASS' if ok else 'FAIL'}  over-thick shell raises and adds no feature")
+    p.close()
+
+with Part(OUT / "st_shell_duct.SLDPRT") as p:        # circle -> rect duct: wall t square to its slope
+    p.select_plane("Top Plane"); p.start_sketch(); p.circle((0, 0, 0), 15); s1 = p.end_sketch("Round")
+    p.plane("P30", "Top Plane", 30)
+    p.select_plane("P30"); p.start_sketch(); p.rect((-20, 30, -10), (20, 30, 10)); s2 = p.end_sketch("Rect")
+    p.loft("Duct", [s1, s2])
+    p.shell("Shell", 2, [(0, 0, 0, "-Y"), (0, 30, 0, "+Y")])
+    p.save()
+    with p.section("Z"):                             # in Z=0 the outer side runs x = 15 + y/6
+        for x0, side in ((-20, 0), (14, 1)):
+            W, H, rows = read_png(p.snap(f"shell_duct_{side}", "*Front", box=(x0, 12, 0, x0 + 6, 18, 0)))
+            k = p._frame[3]
+            def wall(y):                             # outer and inner edge x (mm) at height y
+                c0, row = p.pixel((0, y, 0))
+                xs = sorted((q - c0) / k for q in dark_runs(grey_row(rows, round(row))))
+                return (xs[0], xs[1]) if side == 0 else (xs[-1], xs[-2])
+            (o13, _), (o17, _) = wall(13), wall(17)
+            slope = abs(o17 - o13) / 4
+            o, i = wall(15)
+            check(f"duct shell wall square to the slope, {'left' if side == 0 else 'right'} (mm)",
+                  abs(o - i) * math.cos(math.atan(slope)), 2, tol=0.02)
+    p.close()
+
 with Part() as p:                                   # traps: crossing the axis, two centrelines
     p.select_plane("Front Plane"); p.start_sketch(); p.centreline((0, 0, 0), (0, 1, 0))
     p.rect((-3, 0, 0), (10, 20, 0))
