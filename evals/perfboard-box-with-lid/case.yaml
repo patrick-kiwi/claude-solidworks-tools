@@ -1,0 +1,4 @@
+schema_version: "1.1"
+name: perfboard-box-with-lid
+expected_outcome: |
+  A base with four standoffs on the perfboard's 44 x 64 mm hole pattern and a 12 mm hole in an end wall, a lid that seats on the base, and an assembly with the lid in place; interference check shows no clashes and images confirm the lid is seated, not floating.

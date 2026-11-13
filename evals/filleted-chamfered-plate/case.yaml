@@ -1,0 +1,4 @@
+schema_version: "1.1"
+name: filleted-chamfered-plate
+expected_outcome: |
+  A single-body 50 x 50 x 8 mm plate with four 5 mm through holes at 8 mm from the edges, R6 fillets on the four vertical corner edges, and a 1 mm chamfer around the whole bottom perimeter, verified with exact volumes and images.

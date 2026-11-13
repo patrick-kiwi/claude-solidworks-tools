@@ -1,0 +1,4 @@
+schema_version: "1.1"
+name: l-bracket-vertical-holes
+expected_outcome: |
+  A single-body L-bracket part is built and saved in SolidWorks: two 40 mm legs at right angles, 30 mm wide, 4 mm thick, with two 4.5 mm holes through each leg (including the vertical leg), verified by rendered images.

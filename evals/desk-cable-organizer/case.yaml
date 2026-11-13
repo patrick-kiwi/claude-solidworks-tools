@@ -1,0 +1,4 @@
+schema_version: "1.1"
+name: desk-cable-organizer
+expected_outcome: |
+  A single-body 80 x 20 x 15 mm block with five evenly spaced 6 mm wide, ~10 mm deep slots open at the top running front to back, and two vertical 4 mm through holes placed between slots, verified by images.

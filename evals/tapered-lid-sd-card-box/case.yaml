@@ -1,0 +1,4 @@
+schema_version: "1.1"
+name: tapered-lid-sd-card-box
+expected_outcome: |
+  A base and a lid around 60 x 40 x 25 mm overall where the lid's lip and the base's seat share the same 3-degree drafted profile (matching at top and bottom of the taper), the lid seats with no interference, and outside edges are filleted ~2 mm; verified with numbers and images.
