@@ -146,6 +146,8 @@ with Assembly(OUT / "tl_box.SLDASM") as a:
     assert abs(Assembly.box(lid)[1] - (H - LIP_D)) < 1e-3, "lid not seated"
     assert not a.interference(), "lid and base clash"
     a.save(); a.snaps("asm", ("*Isometric", "*Front"))
+    with a.section("Z"):                       # cut-away through the middle: lip in its seat
+        a.snaps("asm_section", ("*Front", "*Isometric"))
 
 for h in (0, 0.5, 1, 2):
     gap = (FIT_CLEAR + h * math.tan(math.radians(DRAFT))) * math.cos(math.radians(DRAFT))

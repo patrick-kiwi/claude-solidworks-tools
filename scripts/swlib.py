@@ -20,6 +20,7 @@ Typical use:
 import math
 import os
 import types
+from contextlib import contextmanager
 from dataclasses import dataclass
 from pathlib import PureWindowsPath
 
@@ -37,6 +38,8 @@ VIEW_FOR = {"+X": "*Right", "-X": "*Left", "+Y": "*Top", "-Y": "*Bottom",
             "+Z": "*Front", "-Z": "*Back"}
 AXIS = {"X": 0, "Y": 1, "Z": 2}
 DEFAULT_VIEWS = ("*Isometric", "*Front", "*Right", "*Top")
+SECTION_PLANE = {"X": "Right Plane", "Y": "Top Plane", "Z": "Front Plane"}
+SECTION_REVERSE_DEFAULT = False                  # set by test: which half is hidden (see section())
 FILLET_PROPAGATE, FILLET_UNIFORM = 1, 2          # swFeatureFilletOptions_e
 CHAMFER_ANGLE_DISTANCE = 1                       # swChamferType_e (see Part.chamfer)
 
@@ -191,6 +194,33 @@ class _Doc:
         self.doc.SaveAs3(str(out), 0, SAVE_COPY | SAVE_SILENT)
         print(f"image: {wsl_path(out)}")
         return wsl_path(out)
+
+    @contextmanager
+    def section(self, axis="Z", offset=0.0, reverse=False):
+        """Display-only section view (cut-away) for snaps - no geometry is changed, works for
+        parts and assemblies, and is removed again when the block exits:
+
+            with a.section("Z"):                 # cut on the plane Z=0
+                a.snaps("asm_section", ("*Front", "*Isometric"))
+
+        axis is the plane's normal: 'Z' cuts on Front Plane, 'X' on Right Plane, 'Y' on Top
+        Plane; offset (mm) moves the cut along that axis. By default the half toward the
+        standard views (+Z for *Front, +X for *Right, +Y for *Top, and toward *Isometric) is
+        hidden so those views look straight at the cut face; reverse=True keeps that half."""
+        plane = self.doc.FeatureByName(SECTION_PLANE[axis.upper()])
+        assert plane is not None, f"no {SECTION_PLANE[axis.upper()]} in this document"
+        mvm = self.doc.ModelViewManager
+        data = val(mvm.CreateSectionViewData)
+        data.FirstPlane = plane
+        data.FirstOffset = offset * MM
+        data.FirstReverseDirection = SECTION_REVERSE_DEFAULT ^ bool(reverse)
+        data.ShowSectionCap = True
+        assert mvm.CreateSectionView(data), "CreateSectionView failed"
+        try:
+            yield
+        finally:
+            val(mvm.RemoveSectionView)
+            self.doc.GraphicsRedraw2()
 
     def snaps(self, prefix, views=DEFAULT_VIEWS, folder=None):
         names = {"*Isometric": "iso", "*Front": "front", "*Back": "back", "*Right": "right",

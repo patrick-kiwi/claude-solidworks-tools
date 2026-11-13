@@ -32,6 +32,6 @@ Requirements: WSL on a Windows machine with SolidWorks (tested: 2026), and a Win
 Only techniques proven in practice: rectangle/circle sketches on Top Plane and flat axis-aligned
 faces, extrudes and blind/through-all cuts (optionally drafted), edge selection by geometry,
 fillets (single edges or tangent loops, convex or concave), 45-degree chamfers, assemblies placed
-by origin, interference checks. `scripts/selftest.py` checks each against exact volumes. New
+by origin, interference checks, section views. `scripts/selftest.py` checks each against exact volumes. New
 techniques get added once they've been verified; `scripts/sw_api.sh` looks up API signatures and
 enum values offline to help.

@@ -47,6 +47,18 @@ with Part(OUT / "st_features.SLDPRT") as p:
     p.chamfer("Chamfer", 2, edge)
     check("chamfer 2 mm on 40 mm edge", v - p.volume(), 0.5 * 2 * 2 * 40)
     p.save(); p.snaps("features", ("*Isometric", "*Right"))
+
+    # section view: display only - must render, then leave the geometry untouched
+    import os
+    v = p.volume()
+    img = OUT / "features_section_z.png"            # Windows path (snap returns the WSL one)
+    if os.path.exists(str(img)):
+        os.remove(str(img))
+    with p.section("Z"):
+        p.snap("features_section_z", "*Front")
+    ok = os.path.exists(str(img)) and abs(p.volume() - v) < 1e-6
+    results.append(ok)
+    print(f"{'PASS' if ok else 'FAIL'}  section view rendered and removed, volume unchanged")
     p.close()                                          # selftest leaves nothing open
 
 with Part(OUT / "st_draft.SLDPRT") as p:

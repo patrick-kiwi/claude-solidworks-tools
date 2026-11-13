@@ -20,7 +20,7 @@ this way, and one was invisible to the numbers alone.
 Plane or flat axis-aligned faces; extrudes and blind/through-all cuts, optionally drafted
 (tapered); selecting edges by geometry; constant-radius fillets (convex and concave, single
 edges or whole tangent loops) and 45-degree chamfers; assemblies placed by origin with
-interference checks. Every one of these is covered by `scripts/selftest.py` against exact
+interference checks; section (cut-away) views for images. Every one of these is covered by `scripts/selftest.py` against exact
 volumes. Anything else (revolves, sweeps, angled sketch planes, drawings, exports, editing the
 user's existing files) is untested - see "Going beyond the proven scope" below.
 
@@ -100,6 +100,7 @@ When you finish, leave your documents open so the user can look at them in Solid
 | `report()` | Rebuild; print features, body count, volume (mm^3), bbox (mm) |
 | `bbox()`, `volume()` | The same numbers, for asserts |
 | `snap(name, view)` / `snaps(prefix, views)` | Render PNGs next to the saved file; prints the `/mnt/c/...` path to Read |
+| `with doc.section("Z", offset=0):` | Display-only cut-away for the snaps inside the block (parts and assemblies); hides the +axis side so *Front/*Right/*Top/*Isometric look at the cut face |
 | `save(path=None)`, `close()` | Save as / close this document |
 | `Assembly.add(part_path, origin)` | Insert an open part with its **origin** at `origin`; verifies placement |
 | `Assembly.box(comp)` | A placed component's box (mm), for asserting e.g. that a lid is seated |
@@ -215,6 +216,12 @@ A feature returning successfully only means SolidWorks made *something*. Check w
    in some views is SolidWorks' floor shadow, not geometry. Images are rendered from the open
    model; only rely on (and show the user) images from your latest successful run - earlier
    runs' PNGs with other names are left in the folder.
+   For anything inside - a lip in its seat, standoffs in a deep box, a blind hole's depth -
+   render a section: `with p.section("Z"): p.snaps("x_section", ("*Front", "*Isometric"))`.
+   It changes no geometry and costs a second or two, so don't build half-model copies.
+   Place the cut through the feature (`offset`, mm along the axis) and not on a face - a cut
+   that coincides with a wall face shows nothing useful. The image frames the whole model, so
+   small details stay small; say so rather than over-reading them.
 3. **Assemblies.** Check the component boxes (printed by `add`, or `Assembly.box(comp)` in an
    assert) are where you intended **before**
    trusting `interference()`. In the first session the interference check said "0 clashes"
