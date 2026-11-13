@@ -47,6 +47,7 @@ FILLET_PROPAGATE, FILLET_UNIFORM = 1, 2          # swFeatureFilletOptions_e
 CHAMFER_ANGLE_DISTANCE = 1                       # swChamferType_e (see Part.chamfer)
 REF_DISTANCE, REF_FLIP = 8, 256                  # swRefPlaneReferenceConstraints_e
 VISIBILITY_HIDDEN = 1                            # swVisibilityState_e
+END_MID_PLANE = 6                                # swEndConditions_e (revolve: symmetric)
 
 
 # ---------------------------------------------------------------- utilities
@@ -191,6 +192,14 @@ def chamfer_volume(d, straight_len, corner_r=None):
     if corner_r is not None:
         vol += A * 2 * math.pi * (corner_r - d / 3)
     return vol
+
+
+def revolve_volume(area, centroid_r, deg=360):
+    """Pappus: a profile of `area` (mm^2) whose centroid is `centroid_r` mm from the axis,
+    revolved through `deg`, sweeps area * centroid_r * angle. Rectangle spanning radii r0..r1,
+    height h: area = (r1 - r0) * h, centroid_r = (r0 + r1) / 2 (-> pi (r1^2 - r0^2) h for a tube).
+    Triangle: centroid is the mean of its corners. A circle of radius a centred R out: a torus."""
+    return area * centroid_r * math.radians(deg)
 
 
 def assert_close(label, got, want, tol=0.05):
@@ -361,7 +370,7 @@ class Part(_Doc):
         self.fm = self.doc.FeatureManager
         self.sm.AddToDB = True           # draw exactly where told: no snapping / inference
         self.sm.DisplayWhenAdded = False
-        self._xf = None
+        self._xf = self._axis = None
         self.features = []
 
     # ---- selection
@@ -424,6 +433,7 @@ class Part(_Doc):
         """Open a sketch on the selected plane/face."""
         self.sm.InsertSketch(True)
         self._xf = self.sm.ActiveSketch.ModelToSketchTransform.ArrayData
+        self._axis = None
 
     def _s(self, x, y, z):
         # SolidWorks MathTransform, row-vector form: p' = scale * (p . R + T),
@@ -454,6 +464,27 @@ class Part(_Doc):
     def circle(self, centre, radius):
         cx, cy = self._s(*centre)
         self.sm.CreateCircleByRadius(cx, cy, 0, radius*MM)
+
+    def polyline(self, points):
+        """Closed polygon through model-space points on the sketch plane (the last point joins
+        back to the first - don't repeat it). Any straight-sided profile: an L, a trapezoid, a
+        knob's half-section for revolve()."""
+        assert len(points) >= 3, "a closed polyline needs at least 3 points"
+        s = [self._s(*q) for q in points]
+        for (x1, y1), (x2, y2) in zip(s, s[1:] + s[:1]):
+            assert (x1, y1) != (x2, y2), "repeated point in polyline (don't close it yourself)"
+            self.sm.CreateLine(x1, y1, 0, x2, y2, 0)
+
+    def centreline(self, p1, p2):
+        """The axis for revolve()/revolve_cut(): an (infinite) construction line through two
+        model-space points on the sketch plane. Its DIRECTION p1 -> p2 matters for partial
+        angles - see revolve(). One per sketch: with two, SolidWorks silently revolves about
+        the first one drawn, so a second call raises."""
+        assert self._axis is None, "one centreline per sketch (SolidWorks would pick one silently)"
+        (x1, y1), (x2, y2) = self._s(*p1), self._s(*p2)
+        assert (x1, y1) != (x2, y2), "centreline needs two different points"
+        assert self.sm.CreateCenterLine(x1, y1, 0, x2, y2, 0) is not None, "CreateCenterLine failed"
+        self._axis = (p1, p2)
 
     def _end_sketch(self):
         self.sm.InsertSketch(True)
@@ -508,6 +539,39 @@ class Part(_Doc):
                                 False, False, False, False, False, True, True, True, True, False,
                                 0, 0, False, False)
         return self._named(f, name, "cut")
+
+    def _revolve(self, name, deg, reverse, symmetric, cut):
+        assert self._axis, "draw the axis with centreline() in this sketch first"
+        assert 0 < deg <= 360, "deg must be in (0, 360]"
+        assert not (symmetric and deg == 360), "symmetric needs a partial angle"
+        self._end_sketch()
+        f = self.fm.FeatureRevolve2(not symmetric, True, False, cut, reverse, False,
+                                    END_MID_PLANE if symmetric else END_BLIND, 0,
+                                    math.radians(deg), 0, False, False, 0, 0, 0, 0, 0,
+                                    True, True, True)
+        if f is None:
+            raise RuntimeError(f"revolve {name!r} FAILED - usual causes: the profile crosses or "
+                               f"is not in the plane of the centreline, open/overlapping contours, "
+                               f"or (cut) the swept region misses the material")
+        return self._named(f, name, "revolve")
+
+    def revolve(self, name, deg=360, reverse=False, symmetric=False):
+        """Boss: revolve the sketch's closed profile(s) about its centreline() by `deg`.
+        The profile may touch the axis (a solid knob, a cone) but must not cross it.
+        Partial angles turn by the RIGHT-HAND RULE about the centreline's direction p1 -> p2
+        (thumb along p1 -> p2): about +Y, a profile at +X swings toward -Z; about +X, +Y swings
+        toward +Z; about +Z, +X toward +Y (bbox-verified on Front, Right and Top Plane, and
+        flipped by drawing the centreline the other way). reverse=True turns the other way;
+        symmetric=True splits the angle evenly either side of the sketch plane.
+        Check with revolve_volume() (Pappus)."""
+        return self._revolve(name, deg, reverse, symmetric, False)
+
+    def revolve_cut(self, name, deg=360, reverse=False, symmetric=False):
+        """Cut: remove what the sketch's profile sweeps revolving about its centreline() - a
+        groove round a cylinder, a bore, a partial-turn slot. Same direction rules as revolve()
+        (verified: the cut turns the same way a boss would). The profile may extend past the
+        material; only the overlap is removed."""
+        return self._revolve(name, deg, reverse, symmetric, True)
 
     # ---- edges, fillets, chamfers
     def edges(self, where=None):

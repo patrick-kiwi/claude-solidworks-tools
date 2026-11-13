@@ -3,7 +3,7 @@ Run after changing swlib:  sw_run.sh selftest.py   (builds throwaway parts in so
 import math
 import time
 from swlib import (Part, Assembly, workdir, app, val, rr_area, drafted_volume, fillet_volume,
-                   chamfer_volume)
+                   chamfer_volume, revolve_volume)
 from pngread import read_png, grey_row, grey_col, dark_runs
 
 OUT = workdir("_selftest")
@@ -251,6 +251,93 @@ with Part(OUT / "st_plate.SLDPRT") as p:
                 [((20, y, 20), (26, y, 20)) for y in (4, 4.5, 6.5)], scan="col",
                 label="0.5 mm gap between assembly components")
         a.close()
+    p.close()
+
+# polylines and revolves (Pappus: area x centroid radius x angle)
+with Part() as p:                                   # L-shaped polyline extruded
+    p.select_plane("Front Plane"); p.start_sketch()
+    p.polyline([(0, 0, 0), (12, 0, 0), (12, 3, 0), (3, 3, 0), (3, 10, 0), (0, 10, 0)])
+    p.extrude("L", 5)
+    check("L-shaped polyline extruded", p.volume(), (12 * 3 + 3 * 7) * 5)
+    p.close()
+
+with Part(OUT / "st_revolve.SLDPRT") as p:
+    p.select_plane("Front Plane"); p.start_sketch()
+    p.centreline((0, 0, 0), (0, 1, 0))
+    p.rect((6, 0, 0), (10, 20, 0)); p.revolve("Tube")
+    check("revolved tube = pi(R^2-r^2)h", p.volume(), math.pi * (100 - 36) * 20)
+    check("  revolve_volume() helper", revolve_volume(4 * 20, 8), math.pi * (100 - 36) * 20)
+    v = p.volume()
+    p.select_plane("Front Plane"); p.start_sketch()
+    p.centreline((0, 0, 0), (0, 1, 0))
+    p.rect((8, 8, 0), (11, 12, 0)); p.revolve_cut("Groove")       # sticks out past r=10
+    check("revolved groove cut", v - p.volume(), revolve_volume(2 * 4, 9))
+    v = p.volume()
+    p.select_plane("Front Plane"); p.start_sketch()
+    p.centreline((0, 0, 0), (0, 1, 0))
+    p.rect((5, 14, 0), (11, 16, 0)); p.revolve_cut("Quarter slot", 90)
+    check("90-degree revolved cut", v - p.volume(), revolve_volume(4 * 2, 8, 90))
+    p.save(); p.snaps("revolve", ("*Isometric", "*Front"))
+    p.close()
+
+with Part() as p:                                   # profile touching the axis: a cone
+    p.select_plane("Front Plane"); p.start_sketch()
+    p.centreline((0, 0, 0), (0, 1, 0))
+    p.polyline([(0, 0, 0), (10, 0, 0), (0, 20, 0)]); p.revolve("Cone")
+    check("revolved cone = pi r^2 h / 3", p.volume(), revolve_volume(100, 10 / 3))
+    p.close()
+
+with Part() as p:                                   # circle about an off-origin axis: torus
+    p.select_plane("Front Plane"); p.start_sketch()
+    p.centreline((30, 0, 0), (30, 1, 0))
+    p.circle((40, 0, 0), 3); p.revolve("Torus")
+    check("torus about the axis x=30", p.volume(), revolve_volume(math.pi * 9, 10))
+    p.close()
+
+# partial angles: right-hand rule about the centreline's direction (by bbox)
+for plane, a, b, axis, kw, want in [
+        ("Front Plane", (6, 0, 0), (10, 20, 0), ((0, 0, 0), (0, 1, 0)), {}, (0, 0, -10, 10, 20, 0)),
+        ("Front Plane", (6, 0, 0), (10, 20, 0), ((0, 1, 0), (0, 0, 0)), {}, (0, 0, 0, 10, 20, 10)),
+        ("Front Plane", (6, 0, 0), (10, 20, 0), ((0, 0, 0), (0, 1, 0)), {"reverse": True}, (0, 0, 0, 10, 20, 10)),
+        ("Front Plane", (6, 0, 0), (10, 20, 0), ((0, 0, 0), (0, 1, 0)), {"symmetric": True},
+         (6 * math.cos(math.pi / 4), 0, -10 * math.sin(math.pi / 4), 10, 20, 10 * math.sin(math.pi / 4))),
+        ("Front Plane", (0, 6, 0), (20, 10, 0), ((0, 0, 0), (1, 0, 0)), {}, (0, 0, 0, 20, 10, 10)),
+        ("Right Plane", (0, 0, 6), (0, 20, 10), ((0, 0, 0), (0, 1, 0)), {}, (0, 0, 0, 10, 20, 10)),
+        ("Top Plane", (6, 0, 0), (10, 0, 20), ((0, 0, 0), (0, 0, 1)), {}, (0, 0, 0, 10, 10, 20))]:
+    with Part() as p:
+        p.select_plane(plane); p.start_sketch(); p.centreline(*axis); p.rect(a, b)
+        p.revolve("Quarter", 90, **kw)
+        ok = abs(p.volume() - revolve_volume(4 * 20, 8, 90)) < 0.01 and \
+            all(abs(g - w) < 1e-3 for g, w in zip(p.bbox(), want))
+        results.append(ok)
+        d = "".join("+-"[a > b] + "XYZ"[i] for i, (a, b) in enumerate(zip(*axis)) if a != b)
+        print(f"{'PASS' if ok else 'FAIL'}  90 deg about {d} on {plane} {kw or ''}: {p.bbox()}"
+              + ("" if ok else f" (want {want})"))
+        p.close()
+
+with Part() as p:                                   # a cut turns the same way: 270 deg leaves +X+Z
+    p.select_plane("Top Plane"); p.start_sketch(); p.circle((0, 0, 0), 10); p.extrude("Cyl", 20)
+    p.select_plane("Front Plane"); p.start_sketch(); p.centreline((0, 0, 0), (0, 1, 0))
+    p.rect((0, -1, 0), (11, 21, 0)); p.revolve_cut("Three quarters", 270)
+    check("270-degree revolved cut leaves a quarter", p.volume(), math.pi * 100 * 20 / 4)
+    same("  ...the +X+Z quarter", [p.bbox()], [(0, 0, 0, 10, 20, 10)])
+    p.close()
+
+with Part() as p:                                   # traps: crossing the axis, two centrelines
+    p.select_plane("Front Plane"); p.start_sketch(); p.centreline((0, 0, 0), (0, 1, 0))
+    p.rect((-3, 0, 0), (10, 20, 0))
+    try:
+        p.revolve("Across the axis"); ok = False
+    except RuntimeError:
+        ok = True
+    p.select_plane("Front Plane"); p.start_sketch(); p.centreline((0, 0, 0), (0, 1, 0))
+    try:
+        p.centreline((0, -5, 0), (1, -5, 0)); ok = False
+    except AssertionError:
+        pass
+    results.append(ok)
+    print(f"{'PASS' if ok else 'FAIL'}  profile across the axis raises; a second centreline is refused")
+    p.sm.InsertSketch(True)
     p.close()
 
 print(f"\n{sum(results)}/{len(results)} passed")

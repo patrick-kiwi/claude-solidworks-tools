@@ -51,7 +51,15 @@ Why: foundation for revolves and lofts (both sketch on vertical / offset planes)
 - Known trap: a through-all cut sketched on a plane lying exactly on a face boundary fails (hit
   in this session with Top Plane at Y=0) - sketch on the face instead, or document.
 
-## 3. Revolves (boss and cut)
+## 3. Revolves (boss and cut) - DONE
+
+`p.centreline(p1, p2)`, `p.revolve(name, deg, reverse, symmetric)`, `p.revolve_cut(...)`,
+`p.polyline(points)`, `revolve_volume(area, centroid_r, deg)`. Proven in selftest by Pappus
+(tube, cone touching the axis, torus about an off-origin axis, 360 and 90 deg grooves, L-shaped
+polyline extrude, all to 1e-3 mm^3) and by bbox (partial angles on all three planes). Findings:
+partial angles follow the right-hand rule about the centreline's p1 -> p2 direction, cuts too;
+with two centrelines SolidWorks silently uses the first (so swlib allows one per sketch); no
+centreline -> fails even if a profile edge lies on the axis; a profile crossing the axis fails.
 
 Why: knobs, round spacers, caps, bushings, grooves.
 

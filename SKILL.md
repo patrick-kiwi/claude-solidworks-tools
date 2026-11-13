@@ -1,6 +1,6 @@
 ---
 name: solidworks
-description: Drive the user's running SolidWorks from WSL/Linux - build parts and assemblies from Python scripts via the COM API (sketches, extrudes, cuts, draft/taper, fillets, chamfers), then check the result with rendered images, exact volumes and interference detection. Use this whenever the user wants something modelled, designed or built in SolidWorks or "in CAD" (enclosures, boxes, brackets, mounts, plates, spacers, lids, tapered or press-fit lids, cases for a PCB or Raspberry Pi/Arduino, parts for 3D printing), wants edges rounded or two parts checked for fit, or mentions SolidWorks, SLDPRT or SLDASM files - even if they don't say "SolidWorks" and just ask you to "make a part" or "design a case".
+description: Drive the user's running SolidWorks from WSL/Linux - build parts and assemblies from Python scripts via the COM API (sketches, extrudes, cuts, revolves, draft/taper, fillets, chamfers), then check the result with rendered images, exact volumes and interference detection. Use this whenever the user wants something modelled, designed or built in SolidWorks or "in CAD" (enclosures, boxes, brackets, mounts, plates, spacers, knobs, bushings, lids, tapered or press-fit lids, cases for a PCB or Raspberry Pi/Arduino, parts for 3D printing), wants edges rounded or two parts checked for fit, or mentions SolidWorks, SLDPRT or SLDASM files - even if they don't say "SolidWorks" and just ask you to "make a part" or "design a case".
 ---
 
 # SolidWorks via COM
@@ -16,14 +16,16 @@ Read the image; `report()` gives volume, bounding box and the feature list; asse
 interference detection. Use all of them - every bug in the original build session was caught
 this way, and one was invisible to the numbers alone.
 
-**Proven scope:** parts built from rectangles (optionally rounded) and circles sketched on Top,
+**Proven scope:** parts built from rectangles (optionally rounded), circles and straight-sided
+polygons (polylines) sketched on Top,
 Front or Right Plane, offset planes parallel to them, or flat axis-aligned faces; extrudes
 (either direction) and blind/through-all cuts (either or both directions), optionally drafted
-(tapered); selecting edges by geometry; constant-radius fillets (convex and concave, single
+(tapered); revolves and revolved cuts about a sketched centreline (full or partial angle,
+either way or symmetric); selecting edges by geometry; constant-radius fillets (convex and concave, single
 edges or whole tangent loops) and 45-degree chamfers; assemblies placed by origin with
 interference checks; section (cut-away) views and close-ups (zoom to a region, measurable in
 pixels) for images. Every one of these is covered by `scripts/selftest.py` against exact
-volumes or bounding boxes. Anything else (revolves, sweeps, angled sketch planes, drawings,
+volumes or bounding boxes. Anything else (lofts, sweeps, angled sketch planes, drawings,
 exports, editing the user's existing files) is untested - see "Going beyond the proven scope" below.
 
 ## 1. Preflight
@@ -100,6 +102,10 @@ When you finish, leave your documents open so the user can look at them in Solid
 | `start_sketch()` | Open a sketch on the selection |
 | `rect(p1, p2, r=0)` | Axis-aligned rectangle from two opposite corners; `r` rounds corners (must be < half the short side) |
 | `circle(centre, radius)` | Circle |
+| `polyline(points)` | Closed straight-sided polygon through the points (don't repeat the first) |
+| `centreline(p1, p2)` | The axis for a revolve, through two points on the sketch plane; one per sketch; direction matters for partial angles |
+| `revolve(name, deg=360, reverse=False, symmetric=False)` | Boss: revolve the profile about the sketch's centreline. Partial angles follow the right-hand rule about p1 -> p2; `symmetric` splits the angle either side of the plane |
+| `revolve_cut(name, deg=360, ...)` | Cut: remove what the revolved profile sweeps (grooves, bores); same direction rules |
 | `extrude(name, depth, reverse=False, draft_deg=0)` | Boss along the sketch normal: outward from a face, +Y/+Z/+X from Top/Front/Right Plane; `reverse=True` the other way. Draft makes the profile shrink as it grows (`draft_outward=True` to grow) |
 | `cut(name, depth=None, reverse=False, both=False, draft_deg=0)` | Cut AGAINST the sketch normal: into material from a face, -Y/-Z/-X from Top/Front/Right Plane; `None` = through all; `reverse=True` the other way; `both=True` both ways (depth each side). Draft makes the pocket narrow as it deepens |
 | `edges(where)` | Edge records (`kind`, `start`, `mid`, `end`, `radius`, mm) filtered by a predicate; helpers `e.lies_in("Y", 20)`, `e.along("X")` |
@@ -107,7 +113,7 @@ When you finish, leave your documents open so the user can look at them in Solid
 | `chamfer(name, d, edges, propagate=False)` | 45-degree chamfer, `d` back along both faces; `propagate` as for fillets |
 | `report()` | Rebuild; print features, body count, volume (mm^3), bbox (mm) |
 | `bbox()`, `volume()` | The same numbers, for asserts |
-| `rr_area`, `drafted_volume`, `fillet_volume`, `chamfer_volume`, `assert_close` | Exact-volume helpers (module-level in swlib) - see 4. Verify |
+| `rr_area`, `drafted_volume`, `fillet_volume`, `chamfer_volume`, `revolve_volume`, `assert_close` | Exact-volume helpers (module-level in swlib) - see 4. Verify |
 | `snap(name, view)` / `snaps(prefix, views)` | Render PNGs next to the saved file; prints the `/mnt/c/...` path to Read |
 | `snap(name, view, box=(x0, y0, z0, x1, y1, z1))` | **Close-up**: zoom so that model-space box fills the image (any view, parts and assemblies, inside `section()`); prints px per mm. `snaps(..., box=)` too |
 | `doc.pixel((x, y, z))` | (column, row) of a model point in the last close-up - for checking a gap or position in the PNG |
@@ -215,6 +221,35 @@ Plane +X - verified by bounding box both ways). Consequences:
 - New planes are hidden so they don't clutter images (they'd also widen zoom-to-fit);
   selecting them by name still works.
 
+### Revolves (round parts: knobs, spacers, bushings, caps, grooves)
+
+Sketch the half cross-section on a plane that contains the axis, draw the axis with
+`centreline()`, and revolve. For a part standing on Top Plane, use Front Plane and the Y axis:
+
+```python
+p.select_plane("Front Plane"); p.start_sketch()
+p.centreline((0, 0, 0), (0, 1, 0))                       # axis = model Y
+p.polyline([(0, 0, 0), (15, 0, 0), (15, 8, 0), (12, 12, 0), (0, 12, 0)])   # knob half-section
+p.revolve("Knob")                                         # 360 deg
+p.select_plane("Front Plane"); p.start_sketch()
+p.centreline((0, 0, 0), (0, 1, 0))
+p.rect((14, 3, 0), (16, 5, 0)); p.revolve_cut("Grip groove")   # may stick out past the surface
+```
+
+- The profile may touch the axis (a solid knob, a cone) but must not cross it - that fails.
+  It must have its own centreline: a profile edge lying on the axis is not enough.
+- **One centreline per sketch.** With two, SolidWorks silently revolves about the first one
+  drawn; `centreline()` refuses a second.
+- **Partial angles turn by the right-hand rule** about the centreline's direction p1 -> p2:
+  about +Y, a profile at +X swings toward -Z; about +X, +Y swings toward +Z; about +Z, +X
+  swings toward +Y. Draw the centreline the other way or pass `reverse=True` to turn the
+  other way; `symmetric=True` puts half the angle each side of the sketch plane. Cuts turn
+  the same way as bosses. All bbox-verified on Front, Right and Top Plane.
+- Check every revolve by Pappus: `revolve_volume(area, centroid_r, deg)` = area x centroid
+  distance from the axis x angle - a rectangle spanning radii r0..r1 has its centroid at
+  (r0 + r1)/2; a triangle's is the mean of its corners. Exact to 1e-3 mm^3 in the selftest
+  (tube, cone, torus about an off-origin axis, groove, partial cuts).
+
 ### Design habits that avoid failures
 
 - Blind cuts must reach material or the feature fails; when cutting a wall from outside, make
@@ -241,7 +276,7 @@ A feature returning successfully only means SolidWorks made *something*. Check w
    no single image shows. swlib has the formulas, so don't re-derive them:
    `rr_area(a, b, r)` (rounded-rect area from half-extents), `drafted_volume(a, b, r, depth,
    deg)`, `fillet_volume(r, straight_len, corner_r)` / `chamfer_volume(...)` (a straight edge,
-   or a whole rounded-rect loop with Pappus corners), and `assert_close(label, got, want)`.
+   or a whole rounded-rect loop with Pappus corners), `revolve_volume(area, centroid_r, deg)`, and `assert_close(label, got, want)`.
    `examples/tapered_lid_box/build.py` uses all of them.
 2. **Images.** Read the PNGs. Pick the views for this part: an isometric plus the orthographic
    view of every face you cut or that features exit through (e.g. `*Bottom` to prove a hole
@@ -338,7 +373,7 @@ Known behaviour to expect:
 - `scripts/sw_api.sh` - offline API signature / enum lookup
 - `scripts/pngread.py` - stdlib PNG reader and edge-line finder for measuring close-ups
 - `scripts/selftest.py` - regression test of every swlib feature against exact volumes; run it
-  after changing swlib (`sw_run.sh selftest.py`, about 35 s)
+  after changing swlib (`sw_run.sh selftest.py`, about 90 s)
 - `examples/rpi_enclosure/` - Raspberry Pi 4/5 case (base with standoffs and port cutouts, lid
   with locating lip and vents, assembly with interference check). Read it before a similar
   job; it shows the frame, constants and verification style in practice.
