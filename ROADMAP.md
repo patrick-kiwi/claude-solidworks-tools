@@ -75,6 +75,12 @@ Why: knobs, round spacers, caps, bushings, grooves.
 Why: transitions between different cross-sections - knob with a hex socket, funnels, nozzles,
 round-fan-to-rectangular-vent ducts, tapered handles.
 
+- Starting point from item 3: `p.polyline(points)` (closed, straight-sided) is already proven,
+  so `polygon()` can simply compute its corners and call it - a fallback if
+  `CreatePolygon` turns out awkward under late binding (it also adds a construction circle).
+  Lofts from Top Plane to an offset plane (`p.plane("P", "Top Plane", h)`) stand upright like
+  the revolve tests, and a revolved cone frustum (`revolve()` of a trapezoid) is a cross-check
+  for the circle -> circle loft.
 - `p.polygon(centre, circumradius or inradius, sides, angle)` - look up
   `ISketchManager.CreatePolygon`. Prove: extruded hexagon volume = (3*sqrt(3)/2) * R^2 * h.
 - Loft between profiles on parallel planes (item 2): look up
