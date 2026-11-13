@@ -16,14 +16,15 @@ Read the image; `report()` gives volume, bounding box and the feature list; asse
 interference detection. Use all of them - every bug in the original build session was caught
 this way, and one was invisible to the numbers alone.
 
-**Proven scope:** parts built from rectangles (optionally rounded) and circles sketched on Top
-Plane or flat axis-aligned faces; extrudes and blind/through-all cuts, optionally drafted
+**Proven scope:** parts built from rectangles (optionally rounded) and circles sketched on Top,
+Front or Right Plane, offset planes parallel to them, or flat axis-aligned faces; extrudes
+(either direction) and blind/through-all cuts (either or both directions), optionally drafted
 (tapered); selecting edges by geometry; constant-radius fillets (convex and concave, single
 edges or whole tangent loops) and 45-degree chamfers; assemblies placed by origin with
 interference checks; section (cut-away) views and close-ups (zoom to a region, measurable in
 pixels) for images. Every one of these is covered by `scripts/selftest.py` against exact
-volumes. Anything else (revolves, sweeps, angled sketch planes, drawings, exports, editing the
-user's existing files) is untested - see "Going beyond the proven scope" below.
+volumes or bounding boxes. Anything else (revolves, sweeps, angled sketch planes, drawings,
+exports, editing the user's existing files) is untested - see "Going beyond the proven scope" below.
 
 ## 1. Preflight
 
@@ -45,7 +46,9 @@ busy in their session (they will see views spinning while you work).
 
 Write the design down as a docstring at the top of the build script:
 - **The frame.** Y is up. Sketch the footprint on "Top Plane" (the XZ plane, Y=0); it extrudes
-  toward +Y. Centre parts on the origin where sensible - symmetry makes coordinates easy to
+  toward +Y. Profiles that belong in a vertical plane go on "Front Plane" (XY, Z=0, bosses grow
+  +Z) or "Right Plane" (YZ, X=0, bosses grow +X), or on an offset plane (`p.plane(...)`).
+  Centre parts on the origin where sensible - symmetry makes coordinates easy to
   check. Say which physical side faces which axis (e.g. "connectors face +Z").
 - **Key dimensions as named constants** (wall, floor, clearances, hole pattern), with derived
   values computed from them, so a fix is a one-line change.
@@ -91,13 +94,14 @@ When you finish, leave your documents open so the user can look at them in Solid
 | Call | What it does |
 |---|---|
 | `Part(save_as)` / `Assembly(save_as)` | New document from the default template; use as a context manager |
-| `select_plane("Top Plane")` | Select a reference plane (only Top Plane is proven - see below) |
+| `select_plane(name)` | Select "Top Plane", "Front Plane", "Right Plane" or a plane made with `plane()` |
+| `plane(name, base="Top Plane", offset)` | Parallel reference plane `offset` mm along base's normal (negative = the other side; base can be another `plane()`); position asserted, hidden from renders |
 | `select_face(x, y, z, "+X")` | Select the flat face through that point with that outward normal; verified |
 | `start_sketch()` | Open a sketch on the selection |
 | `rect(p1, p2, r=0)` | Axis-aligned rectangle from two opposite corners; `r` rounds corners (must be < half the short side) |
 | `circle(centre, radius)` | Circle |
-| `extrude(name, depth, draft_deg=0)` | Boss: from a face it grows outward along the normal; from Top Plane toward +Y. Draft makes the profile shrink as it grows (`draft_outward=True` to grow) |
-| `cut(name, depth=None, draft_deg=0)` | Cut into material from the sketch face; `None` = through all. Draft makes the pocket narrow as it deepens |
+| `extrude(name, depth, reverse=False, draft_deg=0)` | Boss along the sketch normal: outward from a face, +Y/+Z/+X from Top/Front/Right Plane; `reverse=True` the other way. Draft makes the profile shrink as it grows (`draft_outward=True` to grow) |
+| `cut(name, depth=None, reverse=False, both=False, draft_deg=0)` | Cut AGAINST the sketch normal: into material from a face, -Y/-Z/-X from Top/Front/Right Plane; `None` = through all; `reverse=True` the other way; `both=True` both ways (depth each side). Draft makes the pocket narrow as it deepens |
 | `edges(where)` | Edge records (`kind`, `start`, `mid`, `end`, `radius`, mm) filtered by a predicate; helpers `e.lies_in("Y", 20)`, `e.along("X")` |
 | `fillet(name, r, edges, propagate=False)` | Constant-radius fillet; `propagate=True` follows tangent edges (one edge of a rounded-rect loop does the loop) |
 | `chamfer(name, d, edges, propagate=False)` | 45-degree chamfer, `d` back along both faces; `propagate` as for fillets |
@@ -195,6 +199,21 @@ with the user what stops the lid, and say which you chose:
   snug friction fit that absorbs size error as a small height change. Use a shallow angle for
   grip, a steeper one for less height variation.
 Expose the clearance as a named constant so it can be tuned after a test print.
+
+### Sketching on reference planes
+
+Faces are usually the easiest place to sketch, but some profiles live in a vertical plane or
+at a height where no face exists yet. The rule is the same for planes and faces: **a boss
+grows along the sketch normal, a cut goes against it** (Top Plane +Y, Front Plane +Z, Right
+Plane +X - verified by bounding box both ways). Consequences:
+- A cut sketched on Top Plane under a part standing on Y=0 goes -Y, away from the part, and
+  fails - even through-all. Use `reverse=True`.
+- For a hole through a part that straddles Front or Right Plane, use `cut(..., both=True)`;
+  a one-way cut only removes the half behind the plane.
+- `p.plane("Lid seat", "Top Plane", 30)` makes a plane at Y=30; sketch points on it need
+  y=30. Bosses from it grow the base plane's way (+Y here), cuts go the other way.
+- New planes are hidden so they don't clutter images (they'd also widen zoom-to-fit);
+  selecting them by name still works.
 
 ### Design habits that avoid failures
 
@@ -308,9 +327,8 @@ Known behaviour to expect:
   `sw_api.sh -Enum` and name them as constants at the top of `swlib.py`.
 - **Draft direction**: for both extrude and cut, `Ddir1=False` (swlib's default) shrinks the
   profile as the feature progresses - verified against frustum volumes.
-- Other reference planes ("Front Plane" = XY, "Right Plane" = YZ) can be selected, but which
-  way a boss or cut goes from them is unverified. Prefer sketching on a face of existing
-  geometry, where the direction is known (outward for bosses, inward for cuts).
+- **`FeatureExtrusion2`/`FeatureCut4` argument 2 ("Flip") is not a direction.** It flips the
+  side to cut and does nothing to a boss; argument 3 ("Dir") reverses (swlib's `reverse=`).
 
 ## Files
 

@@ -3,8 +3,9 @@
 Runs under *Windows* Python (launch scripts with sw_run.sh from WSL). Every public coordinate
 and length is in millimetres, in MODEL space; the SolidWorks API itself works in metres.
 
-Model frame used throughout: Y is up. "Top Plane" is the XZ plane at Y=0, and a boss sketched
-on it extrudes toward +Y. Standard views look along: *Front -Z, *Back +Z, *Right -X, *Left +X,
+Model frame used throughout: Y is up. "Top Plane" is the XZ plane at Y=0 (normal +Y), "Front
+Plane" the XY plane at Z=0 (normal +Z), "Right Plane" the YZ plane at X=0 (normal +X). From any
+plane or face a boss grows along the normal and a cut goes against it; reverse=True swaps both. Standard views look along: *Front -Z, *Back +Z, *Right -X, *Left +X,
 *Top -Y, *Bottom +Y (i.e. *Front shows the +Z face).
 
 Typical use:
@@ -44,6 +45,8 @@ SECTION_PLANE = {"X": "Right Plane", "Y": "Top Plane", "Z": "Front Plane"}
 SECTION_REVERSE_DEFAULT = False                  # set by test: which half is hidden (see section())
 FILLET_PROPAGATE, FILLET_UNIFORM = 1, 2          # swFeatureFilletOptions_e
 CHAMFER_ANGLE_DISTANCE = 1                       # swChamferType_e (see Part.chamfer)
+REF_DISTANCE, REF_FLIP = 8, 256                  # swRefPlaneReferenceConstraints_e
+VISIBILITY_HIDDEN = 1                            # swVisibilityState_e
 
 
 # ---------------------------------------------------------------- utilities
@@ -363,9 +366,37 @@ class Part(_Doc):
 
     # ---- selection
     def select_plane(self, name):
+        """Select "Top Plane", "Front Plane", "Right Plane" or a plane made with plane()."""
         self.doc.ClearSelection2(True)
         ok = self.doc.Extension.SelectByID2(name, "PLANE", 0, 0, 0, False, 0, NOTHING, 0)
         assert ok, f"could not select plane {name!r}"
+
+    def plane(self, name, base="Top Plane", offset=0.0):
+        """Create a reference plane parallel to `base`, `offset` mm along base's normal (Top +Y,
+        Front +Z, Right +X; for a plane made here, the same normal as its own base). Negative
+        offsets go the other way. Sketch on it with select_plane(name) - sketch points then
+        need that coordinate, e.g. z=30 on plane("P", "Front Plane", 30).
+        The plane's position is read back from its transform and asserted."""
+        assert offset != 0, "offset 0 is the base plane itself - sketch on that"
+        base_t = val(val(self.doc.FeatureByName(base).GetSpecificFeature2).Transform).ArrayData
+        self.select_plane(base)
+        f = self.fm.InsertRefPlane(REF_DISTANCE | (REF_FLIP if offset < 0 else 0),
+                                   abs(offset)*MM, 0, 0, 0, 0)
+        self._named(f, name, "plane")
+        t = val(val(f.GetSpecificFeature2).Transform).ArrayData
+        # transform rows: [6:9] is the plane normal, [9:12] a point on it (model metres)
+        moved = sum((t[9 + i] - base_t[9 + i]) * base_t[6 + i] for i in range(3)) / MM
+        parallel = abs(sum(t[6 + i] * base_t[6 + i] for i in range(3)))
+        assert abs(moved - offset) < 1e-6 and abs(parallel - 1) < 1e-9, \
+            f"plane {name!r} landed {moved:.4f} mm from {base}, wanted {offset}"
+        # A new plane is drawn in every render (and widens zoom-to-fit); hide it. Hidden
+        # planes can still be selected by name.
+        self.doc.ClearSelection2(True)
+        f.Select2(False, 0)
+        self.doc.BlankRefGeom()
+        self.doc.ClearSelection2(True)
+        assert f.Visible == VISIBILITY_HIDDEN, f"could not hide plane {name!r}"
+        return f
 
     def select_face(self, x, y, z, normal):
         """Select the face through model point (x,y,z) whose outward normal is `normal`
@@ -435,30 +466,44 @@ class Part(_Doc):
         if feat is None:
             raise RuntimeError(
                 f"{kind} {name!r} FAILED - usual causes: sketch on the wrong face/plane, "
-                f"open or overlapping contours, or a blind cut that doesn't reach material")
+                f"open or overlapping contours, or a cut that doesn't reach material (from a "
+                f"reference plane a cut goes against its normal - try reverse=True or both=True)")
         feat.Name = name
         self.features.append(name)
         return feat
 
-    def extrude(self, name, depth, flip=False, draft_deg=0.0, draft_outward=False):
-        """Boss. From a face: grows outward along the face normal. From Top Plane: toward +Y.
+    def extrude(self, name, depth, reverse=False, draft_deg=0.0, draft_outward=False):
+        """Boss. Grows along the sketch normal: outward from a face, +Y from Top Plane, +Z from
+        Front Plane, +X from Right Plane (and from an offset plane, its base's way).
+        reverse=True grows the other way (bbox-verified on all three planes).
         draft_deg tapers the side walls: by default the profile SHRINKS as the boss grows
-        (verified against frustum volumes); draft_outward=True makes it grow instead."""
+        (verified against frustum volumes, also reversed); draft_outward=True makes it grow."""
         self._end_sketch()
         d = draft_deg > 0
-        f = self.fm.FeatureExtrusion2(True, flip, False, END_BLIND, 0, depth*MM, 0,
+        # FeatureExtrusion2's 2nd arg ("Flip") is flip-side-to-cut - a no-op for a boss; the
+        # 3rd ("Dir") is the one that reverses direction.
+        f = self.fm.FeatureExtrusion2(True, False, reverse, END_BLIND, 0, depth*MM, 0,
                                       d, False, draft_outward, False, math.radians(draft_deg), 0,
                                       False, False, False, False, True, True, True, 0, 0, False)
         return self._named(f, name, "extrude")
 
-    def cut(self, name, depth=None, flip=False, draft_deg=0.0, draft_outward=False):
-        """Cut into the material from the sketch face. depth=None means Through All.
+    def cut(self, name, depth=None, reverse=False, both=False, draft_deg=0.0, draft_outward=False):
+        """Cut. depth=None means Through All. Goes AGAINST the sketch normal: into the material
+        from a face, -Y from Top Plane, -Z from Front Plane, -X from Right Plane.
+        So a cut sketched on Top Plane under a part standing on Y=0 goes away from it and
+        FAILS (even through-all) - pass reverse=True to cut toward +Y.
+        both=True cuts both ways from the sketch plane (depth each way, or through all both
+        ways) - the natural choice for a plane through the middle of the part.
         draft_deg tapers the walls: by default the profile SHRINKS as the cut goes deeper
         (a pocket narrower at the bottom - verified); draft_outward=True widens it instead."""
+        assert not (both and draft_deg), "both=True with draft is untested"
         self._end_sketch()
         cond = END_THROUGH_ALL if depth is None else END_BLIND
         d = draft_deg > 0
-        f = self.fm.FeatureCut4(True, flip, False, cond, 0, (depth or 0.01)*MM, 0,
+        D = (depth or 0.01)*MM
+        # 2nd arg "Flip" is flip-side-to-cut (the API's name; with it a full-section cut failed),
+        # not a direction - the 3rd ("Dir") reverses.
+        f = self.fm.FeatureCut4(not both, False, reverse, cond, cond if both else 0, D, D if both else 0,
                                 d, False, draft_outward, False, math.radians(draft_deg), 0,
                                 False, False, False, False, False, True, True, True, True, False,
                                 0, 0, False, False)

@@ -28,7 +28,15 @@ invisible when the view frames the whole model. Also needed to judge items 2-4 b
   pixel width / framed width must match. Check it works for parts, assemblies and with a
   section active.
 
-## 2. Sketching on Front/Right Plane and on offset reference planes
+## 2. Sketching on Front/Right Plane and on offset reference planes - DONE
+
+`extrude/cut(reverse=)`, `cut(both=)`, `p.plane(name, base, offset)` (hidden after creation,
+position asserted from its transform). Proven by bbox in selftest: bosses go +normal and cuts
+-normal from Top/Front/Right, both swapped by `reverse`; offset planes (positive, negative,
+chained) land where asked; two-way cuts are exactly 2x. Traps found: swlib's old `flip` was
+FeatureExtrusion2/FeatureCut4's "flip side to cut" (no-op on a boss) - the direction is the
+next argument; the "Top Plane cut fails" trap below was the -Y cut direction, fixed by
+`reverse=True`; new planes show up in renders unless hidden.
 
 Why: foundation for revolves and lofts (both sketch on vertical / offset planes).
 

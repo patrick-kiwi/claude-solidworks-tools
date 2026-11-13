@@ -2,7 +2,7 @@
 Run after changing swlib:  sw_run.sh selftest.py   (builds throwaway parts in solidworks_work\\_selftest)"""
 import math
 import time
-from swlib import (Part, Assembly, workdir, app, rr_area, drafted_volume, fillet_volume,
+from swlib import (Part, Assembly, workdir, app, val, rr_area, drafted_volume, fillet_volume,
                    chamfer_volume)
 from pngread import read_png, grey_row, grey_col, dark_runs
 
@@ -117,6 +117,91 @@ with Part(OUT / "st_loop.SLDPRT") as p:
     d = 1
     p.chamfer("Loop chamfer", d, bottom, propagate=True)
     check("propagated chamfer round the loop", v - p.volume(), chamfer_volume(d, 100, 5))
+    p.close()
+
+# reference planes: which way bosses and cuts go from Front/Right/Top and offset planes (by bbox)
+def boxes(p):
+    return sorted(tuple(round(v * 1000, 3) for v in val(b.GetBodyBox)) for b in p.bodies())
+
+
+def same(label, got, want):
+    ok = [tuple(map(float, b)) for b in got] == [tuple(map(float, b)) for b in want]
+    results.append(ok)
+    print(f"{'PASS' if ok else 'FAIL'}  {label}: {got}" + ("" if ok else f" (want {want})"))
+
+
+for plane, a, b, fwd, back in [
+        ("Front Plane", (1, 2, 0), (4, 7, 0), (1, 2, 0, 4, 7, 5), (1, 2, -5, 4, 7, 0)),
+        ("Right Plane", (0, 2, 1), (0, 7, 4), (0, 2, 1, 5, 7, 4), (-5, 2, 1, 0, 7, 4)),
+        ("Top Plane", (1, 0, 2), (4, 0, 7), (1, 0, 2, 4, 5, 7), (1, -5, 2, 4, 0, 7))]:
+    for reverse, want in ((False, fwd), (True, back)):
+        with Part() as p:
+            p.select_plane(plane); p.start_sketch(); p.rect(a, b)
+            p.extrude("Boss", 5, reverse=reverse)
+            same(f"boss from {plane}{' reversed' if reverse else ''}", [p.bbox()], [want])
+            p.close()
+
+# a full-section 3 mm slab cut from a plane through the block's middle splits it in two;
+# the two bodies' boxes show which side the cut went
+for plane, rect, fwd, back in [
+        ("Front Plane", ((-12, -2, 0), (12, 12, 0)),
+         [(-10, 0, -10, 10, 10, -3), (-10, 0, 0, 10, 10, 10)], [(-10, 0, -10, 10, 10, 0), (-10, 0, 3, 10, 10, 10)]),
+        ("Right Plane", ((0, -2, -12), (0, 12, 12)),
+         [(-10, 0, -10, -3, 10, 10), (0, 0, -10, 10, 10, 10)], [(-10, 0, -10, 0, 10, 10), (3, 0, -10, 10, 10, 10)])]:
+    for reverse, want in ((False, fwd), (True, back)):
+        with Part() as p:
+            block(p, 10, 10, 10)
+            p.select_plane(plane); p.start_sketch(); p.rect(*rect)
+            p.cut("Slab", 3, reverse=reverse)
+            same(f"cut from {plane}{' reversed' if reverse else ''}", boxes(p), want)
+            p.close()
+
+with Part() as p:                                   # the Top Plane trap: default cut goes -Y
+    block(p, 10, 10, 10)
+    p.select_plane("Top Plane"); p.start_sketch(); p.circle((-6, 0, 6), 2)
+    try:
+        p.cut("Away from the part")
+        ok = False
+    except RuntimeError:
+        ok = True
+    results.append(ok)
+    print(f"{'PASS' if ok else 'FAIL'}  through-all cut from Top Plane under the part fails (goes -Y)")
+    p.close()
+
+with Part(OUT / "st_planes.SLDPRT") as p:
+    block(p, 10, 10, 10)
+    v = p.volume()
+    p.select_plane("Top Plane"); p.start_sketch(); p.circle((-6, 0, 6), 2)
+    p.cut("Up from Top Plane", reverse=True)
+    check("through-all from Top Plane, reversed", v - p.volume(), math.pi * 4 * 10)
+    v = p.volume()
+    p.select_plane("Front Plane"); p.start_sketch(); p.circle((6, 5, 0), 2)
+    p.cut("Both ways from Front Plane", both=True)
+    check("through-all both ways from Front Plane", v - p.volume(), math.pi * 4 * 20)
+    v = p.volume()
+    p.select_plane("Right Plane"); p.start_sketch(); p.circle((0, 5, -6), 1.5)
+    p.cut("Blind both ways from Right Plane", 3, both=True)
+    check("blind 3 mm both ways from Right Plane", v - p.volume(), math.pi * 2.25 * 6)
+    p.close()
+
+with Part(OUT / "st_offset.SLDPRT") as p:           # offset planes, chained, negative, reversed
+    p.plane("P30", "Front Plane", 30)
+    p.select_plane("P30"); p.start_sketch(); p.rect((0, 0, 30), (4, 4, 30)); p.extrude("B30", 5)
+    p.plane("P40", "P30", 10)
+    p.select_plane("P40"); p.start_sketch(); p.rect((0, 0, 40), (4, 4, 40)); p.extrude("B40", 3, reverse=True)
+    p.plane("Pm", "Right Plane", -12.5)
+    p.select_plane("Pm"); p.start_sketch(); p.rect((-12.5, 0, 0), (-12.5, 4, 4)); p.extrude("Bm", 5)
+    p.plane("PT", "Top Plane", 20)
+    p.select_plane("PT"); p.start_sketch(); p.rect((0, 20, 0), (4, 20, 4)); p.extrude("BT", 2)
+    same("bosses on offset planes", boxes(p), sorted([(0, 0, 30, 4, 4, 35), (0, 0, 37, 4, 4, 40),
+                                                     (-12.5, 0, 0, -7.5, 4, 4), (0, 20, 0, 4, 22, 4)]))
+    p.close()
+
+with Part() as p:                                   # draft still shrinks when reversed
+    p.select_plane("Front Plane"); p.start_sketch(); p.rect((-10, -10, 0), (10, 10, 0))
+    p.extrude("Drafted back", 10, reverse=True, draft_deg=4)
+    check("reversed 4 deg drafted boss from Front Plane", p.volume(), frustum(20, 20 - 20 * TAN4, 10))
+    same("  ...and it went -Z", [p.bbox()], [(-10, -10, -10, 10, 10, 0)])
     p.close()
 
 # close-ups: a 0.5 mm slot must land on the predicted pixels in every view and in a section
